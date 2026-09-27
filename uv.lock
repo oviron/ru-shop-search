@@ -2420,8 +2420,8 @@ name = "yandex-connector"
 version = "2.4.2"
 source = { editable = "packages/yandex-connector" }
 dependencies = [
+    { name = "curl-cffi" },
     { name = "fastmcp" },
-    { name = "httpx" },
     { name = "mcp-core" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2429,8 +2429,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
     { name = "fastmcp", specifier = ">=3.4.6,<4" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },

@@ -368,7 +368,7 @@ def parse_zone_items(html: str) -> list[dict[str, Any]]:
       11102 Plus, badge «Скидка 11%») and rides in ``price_old_rub``.
 
     ``product_id`` is ``oskuId`` — the id the row's own ``/card/…/{id}`` link
-    and schema.org ``url`` end in and that ``/product/{id}`` accepts;
+    and schema.org ``url`` end in (``/product/{id}`` answers a captcha);
     ``sku_id`` is ``marketSku``. Brand cannot be resolved (only ``vendorId``
     ships); seller comes from the ``shop`` signal when present. URL and image
     are filled from the page's schema.org ``ItemList`` by product id, else the

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
+from mcp_core import stopgate
+from mcp_core.transport.impersonated import Reply
 from yandex_connector import server
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -163,16 +165,15 @@ async def test_search_raises_drift_when_the_page_is_unrecognisable(monkeypatch):
     assert error_payload(excinfo.value)["error"] == "parser_drift"
 
 
-async def test_search_surfaces_a_captcha_as_rate_limited(monkeypatch):
-    """A captcha means slow down, and the error must say so retryably."""
+async def test_search_stops_the_market_on_a_captcha(monkeypatch):
+    """Капча — стоп Маркета на 30 минут, без повторов и без попыток её решить."""
     stub_html(monkeypatch, {"/search": '<html><body><div id="SmartCaptcha"></div></body></html>'})
 
     with pytest.raises(ToolError) as excinfo:
         await server.yandex_search(query="телефон")
 
-    payload = error_payload(excinfo.value)
-    assert payload["error"] == "rate_limited"
-    assert payload["retryable"] is True
+    assert error_payload(excinfo.value)["error"] == "challenge_required"
+    assert server.SOURCE in stopgate.default_gate().status()
 
 
 async def test_search_flags_a_degraded_ldjson_fallback(monkeypatch):
@@ -204,9 +205,9 @@ async def test_search_rejects_too_short_queries(monkeypatch, bad_query):
 
 
 async def test_card_returns_prices_rating_breakdown_and_reviews(monkeypatch):
-    stub_html(monkeypatch, {"/product/763970960": load("card_washer.html")})
+    stub_html(monkeypatch, {"/card/stiralnaya-mashina/763970960": load("card_washer.html")})
 
-    card = await server.yandex_card(product_id="763970960")
+    card = await server.yandex_card(product_id="/card/stiralnaya-mashina/763970960")
 
     assert card.title.startswith("Стиральная машина")
     assert card.price_rub == 19377.0
@@ -218,9 +219,9 @@ async def test_card_returns_prices_rating_breakdown_and_reviews(monkeypatch):
 
 
 async def test_card_can_skip_reviews(monkeypatch):
-    stub_html(monkeypatch, {"/product/": load("card_washer.html")})
+    stub_html(monkeypatch, {"/card/": load("card_washer.html")})
 
-    card = await server.yandex_card(product_id="763970960", include_reviews=False)
+    card = await server.yandex_card(product_id="/card/stiralnaya-mashina/763970960", include_reviews=False)
 
     assert card.reviews == []
     assert card.review_count is not None  # the count still comes through
@@ -228,9 +229,9 @@ async def test_card_can_skip_reviews(monkeypatch):
 
 async def test_card_warns_when_a_resale_offer_has_no_rating(monkeypatch):
     """Real and common — the warning explains it rather than implying 0 stars."""
-    stub_html(monkeypatch, {"/product/": load("card_no_rating.html")})
+    stub_html(monkeypatch, {"/card/": load("card_no_rating.html")})
 
-    card = await server.yandex_card(product_id="1912483624")
+    card = await server.yandex_card(product_id="/card/tovar/1912483624")
 
     assert card.rating is None
     assert card.meta.healthy is False
@@ -239,10 +240,24 @@ async def test_card_warns_when_a_resale_offer_has_no_rating(monkeypatch):
 
 @pytest.mark.parametrize(
     "bad_id",
-    ["../../etc/passwd", "123?foo=bar", "abc", "12 34", "1/2", "-5"],
+    [
+        "../../etc/passwd",
+        "123?foo=bar",
+        "abc",
+        "12 34",
+        "1/2",
+        "-5",
+        "https://evil.test/card/a/1",
+        "https://market.yandex.ru.evil.test/card/a/1",
+        "https://market.yandex.ru/card/../1",
+        "http://market.yandex.ru/card/a/1",
+        "https://market.yandex.ru/product/1",
+        "/card/a/1/../2",
+        "4356725479",
+    ],
 )
-async def test_card_rejects_non_numeric_ids(monkeypatch, bad_id):
-    """The id goes into a URL path, so it is validated as digits, never escaped."""
+async def test_card_rejects_anything_but_an_id_or_a_card_link(monkeypatch, bad_id):
+    """Ссылка уходит в запрос, поэтому принимается только /card/<slug>/<id> на market.yandex.ru."""
 
     async def fail_fetch(*_args, **_kwargs):
         raise AssertionError("a rejected id must never reach the network")
@@ -255,11 +270,34 @@ async def test_card_rejects_non_numeric_ids(monkeypatch, bad_id):
     assert error_payload(excinfo.value)["error"] == "bad_request"
 
 
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://market.yandex.ru/card/stiralnaya-mashina/763970960?sku=1&utm_source=x",
+        "/card/stiralnaya-mashina/763970960",
+    ],
+)
+async def test_card_reads_the_card_link_from_search(monkeypatch, ref):
+    requested: list[str] = []
+
+    async def fetch(url: str, label: str, ctx=None) -> str:
+        requested.append(url)
+        return load("card_washer.html")
+
+    monkeypatch.setattr(server, "_fetch_html", fetch)
+
+    card = await server.yandex_card(product_id=ref)
+
+    assert requested == ["https://market.yandex.ru/card/stiralnaya-mashina/763970960"]
+    assert card.url == requested[0]
+    assert card.title
+
+
 async def test_card_raises_drift_when_no_title_is_found(monkeypatch):
-    stub_html(monkeypatch, {"/product/": '<html><body>"mainPrice" but no product</body></html>'})
+    stub_html(monkeypatch, {"/card/": '<html><body>"mainPrice" but no product</body></html>'})
 
     with pytest.raises(ToolError) as excinfo:
-        await server.yandex_card(product_id="1")
+        await server.yandex_card(product_id="/card/tovar/1")
 
     assert error_payload(excinfo.value)["error"] == "parser_drift"
 
@@ -272,10 +310,10 @@ async def test_card_empty_shell_is_not_reported_as_parser_drift(monkeypatch):
     state of the world is Yandex serving the product frame with no product
     inside — degraded serving or a delisting, neither of which is a code bug.
     """
-    stub_html(monkeypatch, {"/product/": load("card_empty_shell.html")})
+    stub_html(monkeypatch, {"/card/": load("card_empty_shell.html")})
 
     with pytest.raises(ToolError) as excinfo:
-        await server.yandex_card(product_id="4315891968")
+        await server.yandex_card(product_id="/card/smartfon/4315891968")
 
     payload = error_payload(excinfo.value)
     assert payload["error"] == "transport_down"
@@ -296,10 +334,10 @@ async def test_card_renamed_field_families_still_report_drift(monkeypatch):
         '<noframes data-apiary="patch">{"collections":{"titleV2":{"t1":{"titleRenamed":"Товар"}},'
         '"price":{"p1":{"mainPriceRenamed":{}}}}}</noframes>'
     )
-    stub_html(monkeypatch, {"/product/": html})
+    stub_html(monkeypatch, {"/card/": html})
 
     with pytest.raises(ToolError) as excinfo:
-        await server.yandex_card(product_id="42")
+        await server.yandex_card(product_id="/card/tovar/42")
 
     assert error_payload(excinfo.value)["error"] == "parser_drift"
 
@@ -311,7 +349,7 @@ async def test_selfcheck_chains_search_into_card(monkeypatch):
     """The card probe uses an id from search, so no fixture SKU can go stale."""
     stub_html(
         monkeypatch,
-        {"/search": load("search_washer.html"), "/product/": load("card_washer.html")},
+        {"/search": load("search_telefon_zone.html"), "/card/": load("card_washer.html")},
     )
 
     result = await server.yandex_selfcheck()
@@ -364,7 +402,7 @@ async def test_selfcheck_card_shell_is_inconclusive_not_drift(monkeypatch):
     """
     stub_html(
         monkeypatch,
-        {"/search": load("search_washer.html"), "/product/": load("card_empty_shell.html")},
+        {"/search": load("search_telefon_zone.html"), "/card/": load("card_empty_shell.html")},
     )
 
     result = await server.yandex_selfcheck()
@@ -382,9 +420,9 @@ async def test_selfcheck_ldjson_only_search_is_weak_not_healthy(monkeypatch):
     as inconclusive(ok_ldjson_only), never healthy (2026-09-13 canary gap)."""
     html = """<html><body><script type="application/ld+json">
     {"@type":"ItemList","itemListElement":[{"item":{"name":"X",
-     "url":"https://market.yandex.ru/product/763970960","offers":{"price":100}}}]}
+     "url":"https://market.yandex.ru/card/stiralnaya-mashina/763970960","offers":{"price":100}}}]}
     </script></body></html>"""
-    stub_html(monkeypatch, {"/search": html, "/product/": load("card_washer.html")})
+    stub_html(monkeypatch, {"/search": html, "/card/": load("card_washer.html")})
 
     result = await server.yandex_selfcheck()
 
@@ -441,66 +479,182 @@ async def test_selfcheck_reports_value_drift(monkeypatch):
 # --------------------------------------------------------------- transport ----
 
 
-async def test_fetch_html_caches_within_the_ttl(monkeypatch):
-    """Pages are 2 MB; refetching one inside a conversation is pure waste."""
-    calls: list[str] = []
+class _Wire:
+    """Подменяет curl_cffi: отдаёт заготовленные ответы и пишет каждый запрос."""
 
-    async def fake_get(client, url, **kwargs):
-        calls.append(url)
-        return 200, load("search_washer.html")
+    def __init__(self, *replies: Reply):
+        self.replies = list(replies)
+        self.urls: list[str] = []
+        self.headers: list[dict] = []
 
-    monkeypatch.setattr(server, "get_text_with_retries", fake_get)
-
-    await server._fetch_html("https://market.yandex.ru/search?text=a", "test", None)
-    await server._fetch_html("https://market.yandex.ru/search?text=a", "test", None)
-
-    assert len(calls) == 1
+    async def __call__(self, url, **kwargs):
+        self.urls.append(url)
+        self.headers.append(kwargs.get("headers") or {})
+        return self.replies.pop(0)
 
 
-async def test_fetch_html_rejects_an_empty_body(monkeypatch):
-    async def fake_get(client, url, **kwargs):
-        return 200, "   "
+@pytest.fixture
+def wire(monkeypatch):
+    monkeypatch.setattr(server._settings, "net_backoff_s", 0.0)
+    monkeypatch.setattr(server._limiter, "error_delay", 0.0)
+    server._limiter.reset()
 
-    monkeypatch.setattr(server, "get_text_with_retries", fake_get)
+    def install(*replies: Reply) -> _Wire:
+        fake = _Wire(*replies)
+        monkeypatch.setattr(server, "impersonated_get", fake)
+        return fake
+
+    yield install
+    server._limiter.reset()
+
+
+def _ok(html: str = "<html>страница</html>") -> Reply:
+    return Reply(200, html, None)
+
+
+def _stopped() -> bool:
+    return server.SOURCE in stopgate.default_gate().status()
+
+
+async def _fetch(url: str = "https://market.yandex.ru/search?text=a") -> str:
+    return await server._fetch_html(url, "test", None)
+
+
+async def test_a_page_is_read_as_chrome_and_cached(wire):
+    fake = wire(_ok())
+
+    assert await _fetch() == "<html>страница</html>"
+    assert await _fetch() == "<html>страница</html>"
+
+    assert len(fake.urls) == 1
+    assert "User-Agent" not in fake.headers[0]
+    assert fake.headers[0]["Accept-Language"].startswith("ru-RU")
+
+
+async def test_a_redirect_to_showcaptcha_stops_the_market_on_the_first_request(wire):
+    fake = wire(Reply(302, "", None, "https://market.yandex.ru/showcaptcha?retpath=x"))
 
     with pytest.raises(ToolError) as excinfo:
-        await server._fetch_html("https://market.yandex.ru/search?text=b", "test", None)
+        await _fetch()
+    assert error_payload(excinfo.value)["error"] == "challenge_required"
+    assert "do not retry" in error_payload(excinfo.value)["message"]
+
+    with pytest.raises(ToolError) as again:
+        await _fetch("https://market.yandex.ru/search?text=b")
+    assert error_payload(again.value)["source_stopped"] is True
+    assert len(fake.urls) == 1
+    assert _stopped()
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+async def test_a_refusal_status_stops_the_market_without_a_retry(wire, status):
+    fake = wire(Reply(status, "нельзя", None))
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch()
+
+    assert error_payload(excinfo.value)["error"] == "rate_limited"
+    assert len(fake.urls) == 1
+    assert _stopped()
+
+
+async def test_a_smartcaptcha_page_stops_the_market_and_is_not_cached(wire):
+    fake = wire(_ok('<div id="SmartCaptcha"></div>'))
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch()
+
+    assert error_payload(excinfo.value)["error"] == "challenge_required"
+    assert server._cache.get("https://market.yandex.ru/search?text=a") is None
+    assert len(fake.urls) == 1
+    assert _stopped()
+
+
+async def test_the_word_captcha_alone_is_a_healthy_page(wire):
+    wire(_ok('<div id="/content/captchaService"></div><p>товары</p>'))
+
+    assert "товары" in await _fetch()
+    assert not _stopped()
+
+
+async def test_a_bare_302_is_retried_as_a_hiccup(wire):
+    fake = wire(Reply(302, "", None), _ok())
+
+    assert await _fetch() == "<html>страница</html>"
+    assert len(fake.urls) == 2
+    assert not _stopped()
+
+
+@pytest.mark.parametrize(
+    ("reply", "fragment"),
+    [(Reply(503, "", None), "HTTP 503"), (Reply(0, None, "timeout: no response within 45s"), "timeout")],
+)
+async def test_faults_are_retried_within_the_budget_then_reported(wire, reply, fragment):
+    fake = wire(reply, reply, reply)
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch()
+
+    payload = error_payload(excinfo.value)
+    assert payload["error"] == "transport_down"
+    assert fragment in payload["message"]
+    assert len(fake.urls) == 3
+    assert not _stopped()
+
+
+async def test_a_redirect_to_the_canonical_card_is_followed_once(wire):
+    fake = wire(Reply(301, "", None, "/card/chaynik-redmond/42?sku=7&do-waremd5=abc"), _ok())
+
+    await _fetch("https://market.yandex.ru/product/42")
+
+    assert fake.urls == ["https://market.yandex.ru/product/42", "https://market.yandex.ru/card/chaynik-redmond/42"]
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        [Reply(302, "", None, "https://passport.yandex.ru/auth")],
+        [Reply(301, "", None, "/card/a/1"), Reply(301, "", None, "/card/b/1")],
+    ],
+)
+async def test_other_redirects_are_reported_not_followed(wire, replies):
+    fake = wire(*replies)
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch("https://market.yandex.ru/product/1")
+
+    assert error_payload(excinfo.value)["error"] == "transport_down"
+    assert len(fake.urls) == len(replies)
+    assert not _stopped()
+
+
+async def test_a_missing_page_is_not_found(wire):
+    wire(Reply(404, "нет", None))
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch()
+
+    assert error_payload(excinfo.value)["error"] == "not_found"
+
+
+async def test_an_empty_body_is_a_transport_failure(wire):
+    wire(_ok("   "))
+
+    with pytest.raises(ToolError) as excinfo:
+        await _fetch()
 
     assert error_payload(excinfo.value)["error"] == "transport_down"
 
 
-async def test_fetch_html_maps_429_to_rate_limited(monkeypatch):
-    async def fake_get(client, url, **kwargs):
-        return 429, "slow down"
-
-    monkeypatch.setattr(server, "get_text_with_retries", fake_get)
+async def test_a_stopped_market_sends_nothing(wire):
+    fake = wire()
+    stopgate.default_gate().trip(server.SOURCE, "captcha")
 
     with pytest.raises(ToolError) as excinfo:
-        await server._fetch_html("https://market.yandex.ru/search?text=c", "test", None)
+        await _fetch()
 
-    assert error_payload(excinfo.value)["error"] == "rate_limited"
-
-
-async def test_fetch_html_treats_an_empty_302_as_transport_failure(monkeypatch):
-    """Yandex's transient hiccup: 302 with no body, retried then surfaced."""
-
-    async def fake_get(client, url, **kwargs):
-        return 302, ""
-
-    monkeypatch.setattr(server, "get_text_with_retries", fake_get)
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._fetch_html("https://market.yandex.ru/search?text=d", "test", None)
-
-    payload = error_payload(excinfo.value)
-    assert payload["error"] == "transport_down"
-    assert payload["retryable"] is True
-
-
-def test_retry_statuses_include_302_but_not_429():
-    """302 is a transient hiccup here; retrying a 429 would deepen the limit."""
-    assert 302 in server._RETRY_STATUSES
-    assert 429 not in server._RETRY_STATUSES
+    assert error_payload(excinfo.value)["source_stopped"] is True
+    assert fake.urls == []
 
 
 # ------------------------------------------------------- pagination dedupe ----
@@ -615,24 +769,12 @@ async def test_limit_still_caps_a_page_without_duplicates(monkeypatch):
     assert [item.product_id for item in result.items] == ["0", "1", "2", "3"]
 
 
-async def test_fetch_html_names_the_exception_when_httpx_carries_no_message(monkeypatch):
-    """An exception with an empty message must not produce an empty detail.
+async def test_selfcheck_skips_the_card_when_search_gave_no_card_link(monkeypatch):
+    """Без ссылки /card/ зонд карточки не идёт на /product/<id>: там капча."""
+    stub_html(monkeypatch, {"/search": load("search_washer.html")})
 
-    Observed live on 2026-09-21: the card probe surfaced ``"yandex_card: "`` with
-    nothing after the colon, which tells an operator nothing about which failure
-    it was and hides the difference between a timeout and a reset.
-    """
-    import httpx
+    result = await server.yandex_selfcheck()
 
-    async def fake_get(client, url, **kwargs):
-        raise httpx.ReadTimeout("")
-
-    monkeypatch.setattr(server, "get_text_with_retries", fake_get)
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._fetch_html("https://market.yandex.ru/product/1", "yandex_card", None)
-
-    payload = error_payload(excinfo.value)
-    assert payload["error"] == "transport_down"
-    assert "ReadTimeout" in payload["message"], payload["message"]
-    assert payload["message"].strip() != "yandex_card:"
+    assert result.checks["search"].state == "healthy"
+    assert result.checks["card"].state == "inconclusive"
+    assert "/card/" in result.checks["card"].detail

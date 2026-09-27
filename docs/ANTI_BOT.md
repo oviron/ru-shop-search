@@ -23,7 +23,7 @@ inside a real browser.
 | Marketplace | Datacenter IP | Anti-bot | In release |
 |---|---|---|---|
 | Wildberries | карточка ✅, поиск ❌ 403 | `wbaas`: поиск только с токеном из браузера | ✅ токен из твоего Chrome |
-| Yandex Market | ✅ works | SmartCaptcha (dormant) | ✅ |
+| Yandex Market | ✅ поиск и `/card/` | SmartCaptcha: `/product/<id>` сразу даёт капчу | ✅ `curl_cffi` |
 | Detsky Mir | ✅ works | none | ✅ |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
 | Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
@@ -167,23 +167,24 @@ worth knowing:
   refuses those up front and names the alternative, because an empty product list
   would assert the category is empty.
 
-### Yandex Market — captcha present but dormant
+### Яндекс Маркет — HTML со встроенным состоянием, капча на `/product/`
 
-Server-rendered pages answer HTTP 200 from a datacenter IP. Search is ~2 MB, a
-product page ~2.5 MB, because the whole widget state ships inside the HTML.
+Маркет отдаёт страницы, отрисованные на сервере: состояние виджетов лежит JSON-ом
+внутри HTML. Поиск весит около 1,8 МБ, карточка около 2,3 МБ. JSON API нет:
+`/api/resolve` отвечает 403, `/api/products/{id}` говорит gRPC, публичный Content API
+мёртв.
 
-- **No JSON API is reachable.** `/api/resolve` → 403. `/api/products/{id}` → 404
-  with `content-type: application/grpc+proto`. The old public Content API is dead
-  (502). Partner API needs a seller account.
-- **SmartCaptcha exists but did not trigger** across 14 rapid requests. It is
-  preloaded as an empty widget on every healthy page — which is a trap: matching
-  the substring `captcha` flags every successful response. Detect the real thing
-  via `SmartCaptcha`, `/showcaptcha`, or `checkbox_captcha`.
-- **Transient 302s with an empty body** hit roughly one request in ten. An
-  immediate retry succeeds; the connector retries them.
-
-Because extraction is coupled to a front-end, `yandex_selfcheck` matters more here
-than for a JSON API. Drift is a question of when.
+- Коннектор ходит через `curl_cffi` с отпечатком Chrome. 2026-09-27 с домашнего IP поиск
+  и карточка по ссылке `/card/<slug>/<id>` ответили 200 (LIVE_STATUS).
+- Та же карточка по `/product/<id>` через 3 секунды получила 302 на `/showcaptcha`.
+  Такие 302 раньше выглядели как «пустой 302 примерно на каждый десятый запрос» и
+  повторялись. Теперь это капча: стоп Маркета на 30 минут с первого ответа, а голый id
+  до сети не доходит.
+- Признак капчи — `showcaptcha` в `Location` или `SmartCaptcha`, `/showcaptcha`,
+  `checkbox_captcha` в теле. Слово `captcha` само по себе не признак: на каждой
+  здоровой странице есть пустой `captchaService`.
+- Повторяются только сбои сети, 5xx и 302 без `Location`. 401, 403 и 429 — стоп.
+- Разбор привязан к фронтенду, поэтому `yandex_selfcheck` здесь нужнее, чем у JSON API.
 
 ### Detsky Mir — open JSON API, refused by address
 

@@ -11,6 +11,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from mcp_core import stopgate
 from mcp_core.cache import TTLCache
+from mcp_core.transport import impersonated
 from pydantic import SecretStr
 from wb_connector import server
 
@@ -1623,7 +1624,7 @@ def test_impersonated_refusal_stays_a_transport_error(monkeypatch):
         _clear_wb_cache()
         body = b"<html><title>403 Forbidden</title><hr><center>Angie</center></html>"
         monkeypatch.setattr(
-            server,
+            impersonated,
             "curl_requests",
             SimpleNamespace(get=lambda url, **kw: _FakeCurlResponse(403, body, "text/html")),
         )
@@ -1651,7 +1652,7 @@ def test_impersonated_timeout_uses_the_shared_error_vocabulary(monkeypatch):
 
     async def scenario():
         _clear_wb_cache()
-        monkeypatch.setattr(server, "curl_requests", SimpleNamespace(get=slow_get))
+        monkeypatch.setattr(impersonated, "curl_requests", SimpleNamespace(get=slow_get))
         monkeypatch.setattr(server, "WB_WALL_TIMEOUT", 0.01)
         status, text, err = await server._impersonated_get_text(_GATED_URLS["card"])
         assert (status, text) == (0, None)
@@ -1678,7 +1679,7 @@ def test_impersonated_body_cap_refuses_an_oversized_payload(monkeypatch):
 
     async def scenario():
         _clear_wb_cache()
-        monkeypatch.setattr(server, "curl_requests", SimpleNamespace(get=lambda url, **kw: Grower(200, b"")))
+        monkeypatch.setattr(impersonated, "curl_requests", SimpleNamespace(get=lambda url, **kw: Grower(200, b"")))
         monkeypatch.setattr(server, "MAX_BODY_BYTES", 4096)
         status, text, err = await server._impersonated_get_text(_GATED_URLS["card"])
         assert status == 200

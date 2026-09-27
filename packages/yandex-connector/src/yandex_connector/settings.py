@@ -43,7 +43,10 @@ class YandexSettings(BaseSettings):
         default=2,
         ge=0,
         le=5,
-        description="Retries after the first attempt. Yandex intermittently answers 302 with an empty body.",
+        description=(
+            "Retries after the first attempt, only for network faults, 5xx and a 302 without Location; "
+            "a refusal or captcha is never retried."
+        ),
     )
     net_backoff_s: float = Field(
         default=1.0,

@@ -180,7 +180,7 @@ async def test_yandex_empty_shell_never_becomes_a_verified_card(monkeypatch):
     with pytest.raises(ToolError) as excinfo:
         await server.compare_verify_offer(
             "yandex_market",
-            "4315891968",
+            "https://market.yandex.ru/card/smartfon-realme-note-60kh-4128gb-zelenyy/4315891968",
             expected_price_rub=11329.0,
             expected_variant_id="103796664836",
         )

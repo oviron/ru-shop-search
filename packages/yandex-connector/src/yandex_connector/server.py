@@ -6,11 +6,12 @@ internal product endpoint speaks gRPC, and the old public Content API is dead
 server-rendered HTML that embeds its own widget state as JSON. This connector
 reads that state; the extraction rules live in ``yandex_connector.ssr``.
 
-Pages it depends on (all verified live Jul 2026 from a datacenter IP; the
-search price semantics re-verified live Sep 2026 from a residential IP
-against the product card for the same offer):
-  - ``https://market.yandex.ru/search?text=…&page=N`` — search (~2 MB)
-  - ``https://market.yandex.ru/product/{id}`` — card + first ~13 reviews (~2.5 MB)
+Pages it reads, as Chrome over TLS via curl_cffi (verified live 2026-09-27
+from a residential IP):
+  - ``https://market.yandex.ru/search?text=…&page=N`` — search (~1.8 MB)
+  - ``https://market.yandex.ru/card/<slug>/<id>`` — the link every search row
+    carries; card + first ~13 reviews (~2.3 MB). ``/product/<id>`` for the same
+    product answered 302 to ``/showcaptcha``, so a bare id is never requested.
 
 Behaviours that shape this code:
 
@@ -41,12 +42,11 @@ cards reconcile by ``sku_id``, never by product URL alone.
 zero reviews server-side (they load over XHR), while the product page ships the
 first ~13 complete with pros/cons/dates/votes.
 
-**Transient 302s.** Roughly one request in ten returns 302 with an empty body;
-an immediate retry succeeds. Handled by the transport's retry budget.
-
-**Captcha detection needs real markers.** Every healthy page contains an empty
-``captchaService`` placeholder, so matching the substring "captcha" produces
-false positives. Only SmartCaptcha markers count.
+**A captcha stops the Market at once.** A 302 to ``/showcaptcha``, a
+SmartCaptcha page, 401, 403 and 429 all trip the stop gate for 30 min on the
+first answer; nothing retries them. Only network faults, 5xx and a 302 without
+``Location`` are retried. Every healthy page carries an empty
+``captchaService`` placeholder, so the bare word "captcha" is not a marker.
 
 NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC. Use
 ``log_event`` (stderr) or the ``Context`` logging methods.
@@ -54,18 +54,21 @@ NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC. Use
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import os
+import re
 import urllib.parse
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
-import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware.error_handling import RetryMiddleware
 from mcp.types import ToolAnnotations
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ChallengeRequiredError,
+    ConnectorError,
     NotFoundError,
     ParserDriftError,
     RateLimitedError,
@@ -76,7 +79,9 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport import build_client, get_text_with_retries, proxy_from_env
+from mcp_core.stopgate import DEFAULT_COOLDOWN_S, SourceStoppedError
+from mcp_core.transport import proxy_from_env
+from mcp_core.transport.impersonated import impersonated_get
 from pydantic import Field
 
 from yandex_connector import ssr
@@ -97,28 +102,23 @@ SERVER_VERSION = "2.4.2"
 SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
 SITE_BASE = "https://market.yandex.ru"
+SOURCE = "yandex_market"
 
-# A realistic desktop Chrome UA plus Russian locale is required: without them
-# Yandex may refuse or serve a stripped page.
+# curl_cffi brings Chrome's own User-Agent and client hints; only locale and referer are added.
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "ru-RU,ru;q=0.9",
     "Referer": f"{SITE_BASE}/",
-    "Upgrade-Insecure-Requests": "1",
 }
 
-# 302 with an empty body is Yandex's transient hiccup, not a redirect worth
-# following — retried alongside the usual gateway statuses.
-_RETRY_STATUSES = frozenset({302, 502, 503, 504})
+_REFUSAL_STATUSES = frozenset({401, 403, 429})
+_TRANSIENT_STATUSES = frozenset({502, 503, 504})
+_CARD_PATH_RE = re.compile(r"^/card/[a-z0-9-]{1,200}/\d{1,20}$")
 
 mcp = FastMCP(name="yandex-connector", version=SERVER_VERSION)
 mcp.add_middleware(RetryMiddleware(max_retries=2, base_delay=1.0))
 
-_limiter = Pacer(_settings.min_gap, source="yandex_market")
+_limiter = Pacer(_settings.min_gap, source=SOURCE)
 _cache: TTLCache[str] = TTLCache(ttl_s=_settings.cache_ttl, max_entries=64)
 
 
@@ -126,48 +126,109 @@ def _proxy() -> str | None:
     return (_settings.proxy.get_secret_value() or "").strip() or proxy_from_env("YANDEX_PROXY")
 
 
+def _canonical_card(parts: urllib.parse.SplitResult) -> str | None:
+    if parts.scheme == "https" and parts.netloc == "market.yandex.ru" and _CARD_PATH_RE.match(parts.path):
+        return f"{SITE_BASE}{parts.path}"
+    return None
+
+
+def _card_redirect(location: str) -> str | None:
+    """The canonical card URL a Market redirect points at, or None for anything else."""
+    return _canonical_card(urllib.parse.urlsplit(urllib.parse.urljoin(SITE_BASE + "/", location)))
+
+
+def _card_url(ref: str) -> str | None:
+    """Canonical URL for a ``/card/<slug>/<id>`` link or path exactly as given, else None."""
+    ref = (ref or "").strip()
+    return _canonical_card(urllib.parse.urlsplit(SITE_BASE + ref if ref.startswith("/") else ref))
+
+
+def _refused(label: str, reason: str, error: ConnectorError) -> NoReturn:
+    """Stop the Market for the cooldown on the first refusal; no request repeats it."""
+    _limiter.record_refusal(reason)
+    log_event("yandex.refused", label=label, reason=reason)
+    raise_tool_error(error)
+
+
+def _captcha(label: str) -> NoReturn:
+    _refused(
+        label,
+        "captcha",
+        ChallengeRequiredError(
+            f"{label}: Yandex Market showed SmartCaptcha; the Market is stopped for 30 min, do not retry",
+            provider="yandex",
+        ),
+    )
+
+
 async def _fetch_html(url: str, label: str, ctx: Context | None) -> str:
-    """GET a Yandex Market page and return its HTML, cached and retry-aware."""
+    """GET a Market page as Chrome: cached, one hop to a canonical card, stop on the first refusal.
+
+    Only transport faults, 5xx and a bare 302 without ``Location`` are retried;
+    a redirect to ``showcaptcha`` is a captcha like the SmartCaptcha page itself.
+    """
 
     async def fetch() -> str:
-        if ctx is not None:
-            await ctx.debug(f"{label}: {url}")
-        client = build_client(timeout_s=_settings.timeout, headers=HEADERS, proxy=_proxy())
-        async with client:
+        target = url
+        followed = False
+        attempt = 0
+        while True:
             try:
-                status, html = await get_text_with_retries(
-                    client,
-                    url,
-                    max_bytes=_settings.max_body_bytes,
-                    retries=_settings.net_retries,
-                    backoff_s=_settings.net_backoff_s,
-                    limiter=_limiter,
-                    # A 3xx/4xx body can still be the real page here, so it is never
-                    # truncated as a mere error payload.
-                    error_body_max_bytes=None,
-                    retry_statuses=_RETRY_STATUSES,
-                )
-            except httpx.TransportError as exc:
-                # An httpx transport exception can carry no message at all, and
-                # "yandex_card: " tells an operator nothing about which failure it
-                # was. Name the class before the (possibly empty) detail.
-                detail = _redact(str(exc)).strip() or "(no message)"
-                raise_tool_error(TransportDownError(f"{label}: {type(exc).__name__}: {detail}", provider="yandex"))
-                raise AssertionError("unreachable") from exc  # pragma: no cover
-
-        if status == 429:
-            raise_tool_error(RateLimitedError("yandex"))
-        if status == 404:
-            raise_tool_error(NotFoundError(f"{label}: page not found", provider="yandex"))
-        if status >= 500 or (status == 302 and not html.strip()):
-            raise_tool_error(
-                TransportDownError(
-                    f"{label}: upstream HTTP {status} after retries", provider="yandex", status_code=status
-                )
+                await _limiter.wait()
+            except SourceStoppedError as exc:
+                raise_tool_error(exc)
+            if ctx is not None:
+                await ctx.debug(f"{label}: {target}")
+            reply = await impersonated_get(
+                target,
+                headers=HEADERS,
+                timeout_s=_settings.timeout,
+                wall_timeout_s=_settings.timeout + 5,
+                max_bytes=_settings.max_body_bytes,
+                proxy=_proxy(),
             )
-        if not html.strip():
-            raise_tool_error(TransportDownError(f"{label}: empty response body", provider="yandex"))
-        return html
+            status, location = reply.status, reply.location
+            transient = (
+                (reply.err is not None and status == 0)
+                or status in _TRANSIENT_STATUSES
+                or (status == 302 and not location)
+            )
+            if transient and attempt < _settings.net_retries:
+                attempt += 1
+                await asyncio.sleep(_settings.net_backoff_s * 2 ** (attempt - 1))
+                continue
+            if reply.err is not None:
+                raise_tool_error(
+                    TransportDownError(f"{label}: {reply.err}", provider="yandex", status_code=status or None)
+                )
+            if status in _REFUSAL_STATUSES:
+                _refused(label, f"http {status}", RateLimitedError("yandex", retry_after_s=DEFAULT_COOLDOWN_S))
+            if "showcaptcha" in location or ssr.looks_like_captcha(reply.text or ""):
+                _captcha(label)
+            if 300 <= status < 400 and location:
+                card = _card_redirect(location)
+                if card is None or followed:
+                    where = urllib.parse.urlsplit(urllib.parse.urljoin(SITE_BASE + "/", location))
+                    raise_tool_error(
+                        TransportDownError(
+                            f"{label}: HTTP {status} to {where.hostname}{where.path}, not a Market card",
+                            provider="yandex",
+                            status_code=status,
+                        )
+                    )
+                target, followed = card, True
+                continue
+            if status == 404:
+                raise_tool_error(NotFoundError(f"{label}: page not found", provider="yandex"))
+            if status != 200:
+                raise_tool_error(
+                    TransportDownError(f"{label}: upstream HTTP {status}", provider="yandex", status_code=status)
+                )
+            html = reply.text or ""
+            if not html.strip():
+                raise_tool_error(TransportDownError(f"{label}: empty response body", provider="yandex"))
+            _limiter.record_success()
+            return html
 
     return await _cache.get_or_fetch(url, fetch)
 
@@ -175,9 +236,7 @@ async def _fetch_html(url: str, label: str, ctx: Context | None) -> str:
 def _guard_parse_status(status: str, label: str) -> None:
     """Turn a parse status into the right error, or return for usable results."""
     if status == ssr.ParseStatus.CAPTCHA:
-        raise_tool_error(
-            RateLimitedError("yandex", retry_after_s=300.0),
-        )
+        _captcha(label)
     if status == ssr.ParseStatus.NO_PRODUCTS_FOUND:
         # Neither products nor the "nothing found" banner: the page rendered
         # something we no longer understand. Report drift rather than "no results".
@@ -408,8 +467,11 @@ async def yandex_card(
         str,
         Field(
             min_length=1,
-            max_length=32,
-            description="Numeric Yandex Market product id — take it from yandex_search results.",
+            max_length=500,
+            description=(
+                "The card link from a yandex_search row: https://market.yandex.ru/card/<slug>/<id>. "
+                "A bare numeric id is rejected: Market answers /product/<id> with a captcha."
+            ),
         ),
     ],
     include_reviews: Annotated[
@@ -441,21 +503,20 @@ async def yandex_card(
     On validation or transport/parse failure, raises ToolError with a JSON
     message describing the error code and whether it is retryable.
     """
-    pid = (product_id or "").strip()
-    if not pid.isdigit():
-        # The id is interpolated into a URL path, so it is validated as digits
-        # rather than escaped — no traversal, no query injection.
+    url = _card_url(product_id)
+    if url is None:
         raise_tool_error(
             BadRequestError(
-                f"invalid product_id {product_id!r}: expected digits only (take the id from a yandex_search result)"
+                f"invalid product_id {product_id!r}: pass the card link https://market.yandex.ru/card/<slug>/<id> "
+                "from a yandex_search row; a bare id would open /product/<id>, which Market answers with a captcha"
             )
         )
+    pid = url.rsplit("/", 1)[1]
 
     log_event("yandex_card.start", product_id=pid, include_reviews=include_reviews)
     if ctx is not None:
         await ctx.info(f"yandex_card: product_id={pid}")
 
-    url = f"{SITE_BASE}/product/{pid}"
     html = await _fetch_html(url, "yandex_card", ctx)
     parsed = ssr.parse_card(html)
     if parsed["status"] == ssr.ParseStatus.EMPTY_PRODUCT_SHELL:
@@ -474,7 +535,8 @@ async def yandex_card(
                 f"yandex_card: empty_product_shell for id={pid} — Yandex served the product "
                 "page frame (pageId market:product) with zero product state, no schema.org "
                 "Product and no captcha/not-found markers: degraded serving or a delisted "
-                "product; the parsers are not implicated",
+                "product; the parsers are not implicated. The /card/<slug>/<id> link from "
+                "yandex_search is served in full where /product/<id> comes back hollow",
                 provider="yandex",
                 status_code=200,
             )
@@ -616,7 +678,8 @@ async def yandex_selfcheck(ctx: Context | None = None) -> YandexSelfcheckRespons
                 notes=notes,
             )
         if search.items:
-            probe_product_id = search.items[0].product_id or None
+            first = search.items[0]
+            probe_product_id = first.url if _card_redirect(first.url) else None
     except Exception as exc:
         text = _redact(str(exc))
         drift = "parser_drift" in text
@@ -660,7 +723,7 @@ async def yandex_selfcheck(ctx: Context | None = None) -> YandexSelfcheckRespons
     else:
         checks["card"] = YandexSelfcheckEntry(
             state="inconclusive",
-            detail="skipped: search returned no product id to probe",
+            detail="skipped: search returned no /card/ link to probe",
             notes=["card probe depends on a live id from search"],
         )
 

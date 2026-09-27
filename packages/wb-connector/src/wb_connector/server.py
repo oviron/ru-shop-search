@@ -33,7 +33,6 @@ from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 import httpx
-from curl_cffi import requests as curl_requests
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.error_handling import RetryMiddleware
@@ -55,6 +54,7 @@ from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
 from mcp_core.transport import get_text_budgeted, proxy_from_env
 from mcp_core.transport.chrome_cdp import NavBlocked, cdp_setup_hint
+from mcp_core.transport.impersonated import impersonated_get
 from pydantic import Field
 
 from wb_connector import session as wb_session
@@ -254,22 +254,6 @@ def _refusal_hint() -> str:
     return f" {hint}" if hint else ""
 
 
-def _decode_body(body: bytes, content_type: str) -> str:
-    """Decode a streamed body the way curl_cffi's ``resp.text`` would have.
-
-    Streaming means curl_cffi no longer decodes for us, so the charset comes
-    from where it takes it: the Content-Type header, with UTF-8 — what WB's JSON
-    actually is — as the default.
-    """
-
-    match = re.search(r"charset=([A-Za-z0-9._-]+)", content_type or "")
-    charset = match.group(1) if match else "utf-8"
-    try:
-        return body.decode(charset, errors="replace")
-    except LookupError:
-        return body.decode("utf-8", errors="replace")
-
-
 def _is_usable(result: tuple[int, str | None, str | None]) -> bool:
     """True for a real read: HTTP 200, a body, and not the edge's wall page."""
 
@@ -300,55 +284,18 @@ def _needs_impersonation(url: str) -> bool:
 async def _impersonated_get_text(
     url: str, *, headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None
 ) -> tuple[int, str | None, str | None]:
-    """Fetch via curl_cffi, honouring ``_safe_get_text``'s (status, text, err) contract.
-
-    Same error vocabulary as the httpx path (``timeout:`` / ``network:``), the
-    same body cap and the same wall-clock bound. Deliberately without a retry
-    loop: the fingerprint gate this clears is deterministic, so a refusal would
-    not become a pass on a second attempt, and a genuine transient fault still
-    surfaces to the caller as a transport error.
-    """
-
-    def _fetch() -> tuple[int, str | None, str | None]:
-        """Read the body through the cap, exactly as the shared path does.
-
-        ``stream=True`` is the point: without it the whole response is buffered
-        before ``MAX_BODY_BYTES`` is consulted, which turns a CDN-compromise /
-        MITM defence into a ceiling of "whatever the server happens to send".
-        The httpx path aborts mid-read; this one must not be the weaker of the
-        two. curl_cffi ignores a requested chunk size — curl decides the
-        boundaries — so the bound is the cap plus whatever the final chunk
-        added, not the cap exactly. That is still a bound.
-        """
-        resp = curl_requests.get(
-            url,
-            headers=headers or _IMPERSONATED_HEADERS,
-            cookies=cookies,
-            impersonate=_IMPERSONATE_PROFILE,
-            timeout=_settings.timeout,
-            allow_redirects=False,
-            proxy=_proxy(),
-            stream=True,
-        )
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in resp.iter_content():
-            if not chunk:
-                continue
-            total += len(chunk)
-            if total > MAX_BODY_BYTES:
-                return resp.status_code, None, f"network: body exceeded {MAX_BODY_BYTES} bytes"
-            chunks.append(chunk)
-        return resp.status_code, _decode_body(b"".join(chunks), resp.headers.get("content-type", "")), None
-
-    try:
-        status, text, err = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=WB_WALL_TIMEOUT)
-    except TimeoutError:  # asyncio.TimeoutError is an alias of this since 3.11
-        return 0, None, f"timeout: no response within {WB_WALL_TIMEOUT}s"
-    except Exception as exc:  # curl_cffi raises its own RequestsError hierarchy
-        return 0, None, f"network: {exc}"
-
-    return status, text, err
+    """One curl_cffi GET in ``_safe_get_text``'s (status, text, err) contract, without retries."""
+    reply = await impersonated_get(
+        url,
+        headers=headers or _IMPERSONATED_HEADERS,
+        cookies=cookies,
+        timeout_s=_settings.timeout,
+        wall_timeout_s=WB_WALL_TIMEOUT,
+        max_bytes=MAX_BODY_BYTES,
+        proxy=_proxy(),
+        profile=_IMPERSONATE_PROFILE,
+    )
+    return reply.status, reply.text, reply.err
 
 
 class _PoliteGate:

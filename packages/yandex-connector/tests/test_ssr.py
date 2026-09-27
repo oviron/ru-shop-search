@@ -604,3 +604,21 @@ def test_parse_search_still_falls_back_to_schema_org_when_zone_is_missing():
     assert result["items"][0]["source"] == "ld+json"
     assert result["items"][0]["price_with_plus"] == 123.0
     assert "price_rub" not in result["items"][0]
+
+
+def test_card_path_page_of_2026_09_27_keeps_prices_rating_and_seller():
+    """Карточка по /card/<slug>/<id>, снятая 2026-09-27: цена та же, что в строке выдачи."""
+    card = ssr.parse_card(load("card_rtx5070_card_path.html"))
+
+    assert card["status"] == ssr.ParseStatus.OK
+    assert (card["product_id"], card["sku_id"]) == ("4356725479", "4384603099")
+    assert (card["brand"], card["seller"]) == ("Palit", "ОНЛАЙНТРЕЙД.РУ")
+    assert (card["price_rub"], card["price_with_plus"], card["price_before_discount_rub"]) == (
+        89460.0,
+        86776.0,
+        106500.0,
+    )
+    assert (card["rating"], card["rating_count"], card["review_count"]) == (5.0, 69, 21)
+    assert card["rating_stars"] == {1: 0, 2: 0, 3: 0, 4: 1, 5: 68}
+    [review] = card["reviews"]
+    assert (review["rating"], review["date"], review["votes_up"], review["votes_down"]) == (5, "12 июля 2025", 30, 14)
