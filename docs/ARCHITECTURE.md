@@ -24,6 +24,7 @@ ru-shop-search/
 │   ├── nix-connector/          Nix                  → nix-mcp
 │   ├── holodilnik-connector/   Holodilnik           → holodilnik-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
+│   ├── pepper-connector/       Pepper (deals)       → pepper-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
 │   └── marketplace-connector/  plugin server + CLI  → marketplace-mcp
 ├── .claude-plugin/          plugin.json (MCP server) and a local marketplace.json

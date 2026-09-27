@@ -1,0 +1,15 @@
+{
+  "url": "https://www.pepper.ru/deals/5070-694148",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:44:01 in the plugin's anonymous Chrome profile (no login), home IP, by navigating the tab to the URL. An active deal page. Trimmed stand-in of document.documentElement.outerHTML: removed scripts, svg, images, style/onclick attributes, the /visit/ tracker links, author names and avatars, comments; JSON-LD kept without author and image.",
+  "ground_truth": {
+    "price": "75000.0 RUB (JSON-LD Offer), no crossed-out price on the page",
+    "merchant": "Wildberries",
+    "availability": "https://schema.org/InStock",
+    "valid_until": "2026-09-30 00:59:00 +0300",
+    "published": "2026-09-17T14:43:13+03:00",
+    "temperature": "964°",
+    "notice": "Срок действия истекает через 3 дня"
+  },
+  "sha256": "8e5b59371b8564d56210a571cd5fbc4e5077a5bdb44c8b89120c6b8ef878dbaf"
+}

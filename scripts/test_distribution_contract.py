@@ -58,6 +58,7 @@ def test_all_comparison_sources_have_a_wheelhouse_dependency() -> None:
         "nix": "nix-connector",
         "holodilnik": "holodilnik-connector",
         "aliexpress": "aliexpress-connector",
+        "pepper": "pepper-connector",
     }
     metadata = tomllib.loads((ROOT / "packages" / "compare-connector" / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"

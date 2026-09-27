@@ -1,0 +1,12 @@
+{
+  "url": "https://www.pepper.ru/selective_search?keyword=rtx+5070&search_list=deals",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:42:44 in the plugin's anonymous Chrome profile (no login), home IP, by navigating the tab to the URL. Search results for «rtx 5070». Trimmed stand-in of document.documentElement.outerHTML: removed scripts, svg, images, style/onclick attributes, the /visit/ tracker links, author names and avatars, comments; JSON-LD kept without author and image.",
+  "ground_truth": {
+    "deals": "4 (button «Показать все (4)»)",
+    "694148": "Видеокарта MSI RTX 5070 SHADOW 2X OC 12 ГБ (с ВБ кошельком): 75 000₽, Wildberries, 10 дней назад, 964°",
+    "694666": "Ноутбук ASUS TUF Gaming A16 …: 142 883₽, 182 418₽ crossed out, Wildberries, 6 дней назад, 427°",
+    "689146": "Игровой ноутбук MECHREVO YaoShi16 Utral …: 219 404₽, OZON, «Истекло», -64°"
+  },
+  "sha256": "6b337e830e132bac36c0a70d20e2c65bf8b6d3c590d89964f8e747f707e22758"
+}

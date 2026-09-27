@@ -13,6 +13,17 @@ from pydantic import BaseModel, Field, model_validator
 from compare_connector.identity import OfferEvidence, ProductIdentity
 
 
+class DealInfo(BaseModel):
+    """A community deal post (Pepper): a price someone saw at a shop, not a shop offer."""
+
+    price_rub: float | None = Field(default=None, description="Price the poster saw at the merchant; never ranked.")
+    old_price_rub: float | None = Field(default=None, description="Crossed-out price in the post, when shown.")
+    merchant: str = Field(default="", description="Shop the deal points to.")
+    posted: str | None = Field(default=None, description="Post age as the site shows it («10 дней назад»).")
+    expired: bool = Field(default=False, description="The site marks the deal as ended.")
+    temperature: int | None = Field(default=None, description="Community vote score; negative means disputed.")
+
+
 class MarketOffer(BaseModel):
     """One offer, normalised across marketplaces so prices are comparable."""
 
@@ -56,6 +67,13 @@ class MarketOffer(BaseModel):
         default=None,
         description="Optional provenance for the native offer and its identity evidence.",
     )
+    deal: DealInfo | None = Field(
+        default=None,
+        description=(
+            "Set for a deal post (Pepper): price_rub stays None and the post's price lives here, "
+            "to be checked at the merchant before quoting."
+        ),
+    )
 
     @model_validator(mode="after")
     def _mirror_rouble_price_into_native(self) -> MarketOffer:
@@ -67,6 +85,12 @@ class MarketOffer(BaseModel):
         """
         if self.price_native is None and self.currency == "rub":
             self.price_native = self.price_rub
+        return self
+
+    @model_validator(mode="after")
+    def _deal_has_no_ranking_price(self) -> MarketOffer:
+        if self.deal is not None and self.price_rub is not None:
+            raise ValueError("a deal post has no ranking price: keep price_rub None and the price in deal")
         return self
 
 

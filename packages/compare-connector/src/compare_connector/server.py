@@ -55,6 +55,7 @@ from pydantic import Field
 from compare_connector.identity import ProductIdentity, identity_from_mapping, match_product_identity
 from compare_connector.models_output import (
     CompareResponse,
+    DealInfo,
     MarketOffer,
     SourceOutcome,
 )
@@ -83,6 +84,7 @@ _CARD_TOOL_NAMES = {
     "nix": "nix_card",
     "holodilnik": "holodilnik_card",
     "aliexpress": "aliexpress_card",
+    "pepper": "pepper_card",
 }
 
 
@@ -186,6 +188,13 @@ def _available_sources() -> dict[str, Any]:
         log_event("compare.source_unavailable", source="holodilnik", error=_redact(str(exc))[:120])
 
     try:
+        from pepper_connector import server as pepper_server
+
+        sources["pepper"] = pepper_server
+    except Exception as exc:
+        log_event("compare.source_unavailable", source="pepper", error=_redact(str(exc))[:120])
+
+    try:
         from aliexpress_connector import server as aliexpress_server
 
         sources["aliexpress"] = aliexpress_server
@@ -217,6 +226,7 @@ SEARCHABLE = (
     "holodilnik",
     "aliexpress",
     "detsky_mir",
+    "pepper",
 )
 
 
@@ -831,6 +841,34 @@ async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+async def _search_pepper(query: str, limit: int) -> list[MarketOffer]:
+    """Adapt ``pepper_search`` deals: a post's price goes to ``deal`` and never ranks."""
+    server = SOURCES["pepper"]
+    response = await server.pepper_search(query=query, limit=min(limit, server.MAX_DEALS))
+
+    offers: list[MarketOffer] = []
+    for item in (getattr(response, "items", None) or [])[:limit]:
+        offers.append(
+            MarketOffer(
+                source="pepper",
+                product_id=str(item.deal_id or ""),
+                title=item.title or "",
+                seller=item.merchant or "",
+                price_rub=None,
+                url=item.url or "",
+                deal=DealInfo(
+                    price_rub=item.deal_price_rub,
+                    old_price_rub=item.old_price_rub,
+                    merchant=item.merchant or "",
+                    posted=item.posted,
+                    expired=item.expired,
+                    temperature=item.temperature,
+                ),
+            )
+        )
+    return OfferBatch(offers, response)
+
+
 async def _search_detmir(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``detmir_search`` results (HTTP; the site's own results page)."""
     server = SOURCES["detsky_mir"]
@@ -870,6 +908,7 @@ _SEARCH_IMPLS = {
     "holodilnik": _search_holodilnik,
     "aliexpress": _search_aliexpress,
     "detsky_mir": _search_detmir,
+    "pepper": _search_pepper,
 }
 
 
@@ -1255,6 +1294,7 @@ async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool
             "nix": "url",
             "holodilnik": "url",
             "aliexpress": "item_id_or_url",
+            "pepper": "url",
         }[name]
         result = await _gated(name, lambda: tool(**{argument: product_id_or_url}))
     payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
@@ -1475,6 +1515,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "search and cards render in the plugin's Chrome tab, a card opens from a search tab; "
                 "the x5sec check stops the shop, goods that do not name the query are dropped, "
                 "coupon prices are never the price"
+            ),
+            "pepper": (
+                "community deal posts read in the plugin's Chrome tab; a post's price sits in "
+                "offer.deal and never ranks, old and expired deals included, a card opens by its URL"
             ),
         },
         "source_timeout_s": SOURCE_TIMEOUT_S,

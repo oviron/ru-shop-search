@@ -34,6 +34,7 @@ dependencies = [
     "nix-connector",
     "holodilnik-connector",
     "aliexpress-connector",
+    "pepper-connector",
     "marketplace-connector",
 ]
 
@@ -61,6 +62,7 @@ regard-connector = { workspace = true }
 nix-connector = { workspace = true }
 holodilnik-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
+pepper-connector = { workspace = true }
 marketplace-connector = { workspace = true }
 
 [dependency-groups]
@@ -140,6 +142,7 @@ testpaths = [
     "packages/nix-connector/tests",
     "packages/holodilnik-connector/tests",
     "packages/aliexpress-connector/tests",
+    "packages/pepper-connector/tests",
     "packages/marketplace-connector/tests",
 ]
 asyncio_mode = "auto"
@@ -173,6 +176,7 @@ source = [
     "packages/nix-connector/src/nix_connector",
     "packages/holodilnik-connector/src/holodilnik_connector",
     "packages/aliexpress-connector/src/aliexpress_connector",
+    "packages/pepper-connector/src/pepper_connector",
     "packages/marketplace-connector/src/marketplace_connector",
 ]
 omit = [

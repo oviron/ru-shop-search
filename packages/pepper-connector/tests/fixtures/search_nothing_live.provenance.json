@@ -1,0 +1,10 @@
+{
+  "url": "https://www.pepper.ru/selective_search?keyword=%D0%B0%D0%B1%D1%8B%D1%80%D0%B2%D0%B0%D0%BB%D0%B3%D1%89%D0%B7%D1%85&search_list=deals",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:43:50 in the plugin's anonymous Chrome profile (no login), home IP, by navigating the tab to the URL. Search results for «абырвалгщзх». Trimmed stand-in of document.documentElement.outerHTML: removed scripts, svg, images, style/onclick attributes, the /visit/ tracker links, author names and avatars, comments; JSON-LD kept without author and image.",
+  "ground_truth": {
+    "deals": "0",
+    "empty_state": "Упс! Похоже, что ничего не нашлось..."
+  },
+  "sha256": "f0de4f115479ac4630311f39ec373bcf4753d69477974494de62c07f85055c9b"
+}

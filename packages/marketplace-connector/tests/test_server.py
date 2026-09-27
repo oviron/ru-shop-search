@@ -35,7 +35,7 @@ async def test_card_rejects_an_unknown_shop():
         await server.card(shop="nowhere", product="1")
 
 
-async def test_shops_lists_all_fifteen_with_stop_state():
+async def test_shops_lists_all_fifteen_with_stop_state(monkeypatch):
     default_gate().trip("ozon", "captcha")
 
     result = await server.shops()
@@ -43,6 +43,10 @@ async def test_shops_lists_all_fifteen_with_stop_state():
     by_key = {shop.key: shop for shop in result.shops}
     assert len(by_key) == 15
     assert by_key["wildberries"].installed is True
-    assert by_key["pepper"].installed is False
+    assert by_key["pepper"].installed is True
     assert by_key["ozon"].stopped["reason"] == "captcha"
     assert by_key["wildberries"].stopped is None
+
+    monkeypatch.setattr(server.compare, "SOURCES", {k: v for k, v in server.compare.SOURCES.items() if k != "pepper"})
+    by_key = {shop.key: shop for shop in (await server.shops()).shops}
+    assert by_key["pepper"].installed is False

@@ -1,0 +1,11 @@
+{
+  "url": "https://www.pepper.ru/selective_search?keyword=iphone+15&search_list=deals",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:45:17 in the plugin's anonymous Chrome profile (no login), home IP, by navigating the tab to the URL. Search results for «iphone 15»: every deal is about two years old and none is marked «Истекло». Trimmed stand-in of document.documentElement.outerHTML: removed scripts, svg, images, style/onclick attributes, the /visit/ tracker links, author names and avatars, comments; JSON-LD kept without author and image.",
+  "ground_truth": {
+    "deals": "5 (button «Показать все (5)»)",
+    "508029": "Смартфон Apple iPhone 15, 6/128 ГБ (из-за рубежа): 59 892₽, OZON, почти 2 года назад, -160°",
+    "502009": "Смартфон iPhone 15 6/128 ГБ …: 59 965₽, 65 000₽ crossed out, OZON, около 2 лет назад, -266°"
+  },
+  "sha256": "49ce45cf51d580aaddd51ea49e4de709420ab680d8a2e838ef9223bfd989ee92"
+}

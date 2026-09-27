@@ -32,6 +32,7 @@ regard = ["regard-connector"]
 nix = ["nix-connector"]
 holodilnik = ["holodilnik-connector"]
 aliexpress = ["aliexpress-connector"]
+pepper = ["pepper-connector"]
 all = [
     "ozon-connector",
     "avito-connector",
@@ -44,6 +45,7 @@ all = [
     "nix-connector",
     "holodilnik-connector",
     "aliexpress-connector",
+    "pepper-connector",
 ]
 
 [project.scripts]
@@ -71,3 +73,4 @@ vseinstrumenti-connector = { workspace = true }
 regard-connector = { workspace = true }
 nix-connector = { workspace = true }
 holodilnik-connector = { workspace = true }
+pepper-connector = { workspace = true }

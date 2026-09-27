@@ -311,6 +311,73 @@ async def test_holodilnik_search_rows_become_offers(monkeypatch):
     assert offers[0].url == "https://www.holodilnik.ru/refrigerator/two_chambered_refrigerators/atlant/xm_4012_022/"
 
 
+async def test_pepper_deals_become_unranked_offers(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from mcp_core.domtest import JsdomUnavailable, run_extractor
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from pepper_connector import server as pepper
+
+    fixture = (Path(__file__).parents[2] / "pepper-connector/tests/fixtures/search_rtx5070_live.html").resolve()
+
+    class Page:
+        async def evaluate(self, expression, arg=None):
+            try:
+                return json.dumps(run_extractor(expression, fixture, page_url="https://www.pepper.ru/selective_search"))
+            except JsdomUnavailable as exc:
+                pytest.skip(str(exc))
+
+    @asynccontextmanager
+    async def open_page(url, wait_ms=5000, **kwargs):
+        yield Page()
+
+    monkeypatch.setattr(pepper, "open_page", open_page)
+    monkeypatch.setattr(pepper, "_pacer", Pacer(0.0, source="pepper", gate=StopGate(None)))
+    monkeypatch.setattr(pepper, "_min_gap", 0.0)
+    pepper._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"pepper": pepper})
+
+    offers = await server._search_pepper("rtx 5070", 4)
+
+    assert [(o.product_id, o.seller, o.price_rub, o.in_stock) for o in offers] == [
+        ("694666", "Wildberries", None, None),
+        ("694148", "Wildberries", None, None),
+        ("692502", "OZON", None, None),
+        ("689146", "OZON", None, None),
+    ]
+    assert offers[1].url == "https://www.pepper.ru/deals/5070-694148"
+    assert offers[1].deal is not None
+    assert (offers[1].deal.price_rub, offers[1].deal.posted, offers[1].deal.temperature) == (
+        75000.0,
+        "10 дней назад",
+        964,
+    )
+    assert (offers[0].deal.price_rub, offers[0].deal.old_price_rub) == (142883.0, 182418.0)
+    assert (offers[3].deal.expired, offers[3].deal.posted) == (True, None)
+
+
+def test_a_deal_price_can_never_become_the_ranking_price():
+    with pytest.raises(ValidationError):
+        MarketOffer(source="pepper", price_rub=75000.0, deal={"price_rub": 75000.0})
+
+
+async def test_a_cheaper_deal_does_not_win_the_comparison(monkeypatch):
+    async def shop(query, limit):
+        return [offer("wildberries", 80000.0)]
+
+    async def deals(query, limit):
+        return [offer("pepper", None, deal={"price_rub": 75000.0, "merchant": "Wildberries"})]
+
+    stub_sources(monkeypatch, {"wildberries": shop, "pepper": deals})
+
+    result = await server.compare_prices("rtx 5070")
+
+    assert result.cheapest is not None and result.cheapest.source == "wildberries"
+    assert [o.source for o in result.offers] == ["wildberries", "pepper"]
+    assert result.offers[1].deal is not None and result.offers[1].deal.price_rub == 75000.0
+
+
 async def test_nix_search_rows_become_offers(monkeypatch):
     from contextlib import asynccontextmanager
 

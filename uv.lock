@@ -24,6 +24,7 @@ members = [
     "mvideo-connector",
     "nix-connector",
     "ozon-connector",
+    "pepper-connector",
     "regard-connector",
     "ru-shop-search",
     "vseinstrumenti-connector",
@@ -386,6 +387,7 @@ all = [
     { name = "mvideo-connector" },
     { name = "nix-connector" },
     { name = "ozon-connector" },
+    { name = "pepper-connector" },
     { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
 ]
@@ -412,6 +414,9 @@ nix = [
 ]
 ozon = [
     { name = "ozon-connector" },
+]
+pepper = [
+    { name = "pepper-connector" },
 ]
 regard = [
     { name = "regard-connector" },
@@ -443,6 +448,8 @@ requires-dist = [
     { name = "nix-connector", marker = "extra == 'nix'", editable = "packages/nix-connector" },
     { name = "ozon-connector", marker = "extra == 'all'", editable = "packages/ozon-connector" },
     { name = "ozon-connector", marker = "extra == 'ozon'", editable = "packages/ozon-connector" },
+    { name = "pepper-connector", marker = "extra == 'all'", editable = "packages/pepper-connector" },
+    { name = "pepper-connector", marker = "extra == 'pepper'", editable = "packages/pepper-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
     { name = "regard-connector", marker = "extra == 'all'", editable = "packages/regard-connector" },
@@ -452,7 +459,7 @@ requires-dist = [
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "nix", "holodilnik", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "nix", "holodilnik", "aliexpress", "pepper", "all"]
 
 [[package]]
 name = "coverage"
@@ -1264,6 +1271,7 @@ dependencies = [
     { name = "mvideo-connector" },
     { name = "nix-connector" },
     { name = "ozon-connector" },
+    { name = "pepper-connector" },
     { name = "pydantic" },
     { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
@@ -1286,6 +1294,7 @@ requires-dist = [
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "nix-connector", editable = "packages/nix-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
+    { name = "pepper-connector", editable = "packages/pepper-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "regard-connector", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
@@ -1558,6 +1567,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "pepper-connector"
+version = "2.4.2"
+source = { editable = "packages/pepper-connector" }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "playwright" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "playwright", specifier = ">=1.40" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
 ]
 
 [[package]]
@@ -2123,6 +2153,7 @@ dependencies = [
     { name = "mvideo-connector" },
     { name = "nix-connector" },
     { name = "ozon-connector" },
+    { name = "pepper-connector" },
     { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
     { name = "wb-connector" },
@@ -2156,6 +2187,7 @@ requires-dist = [
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "nix-connector", editable = "packages/nix-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
+    { name = "pepper-connector", editable = "packages/pepper-connector" },
     { name = "regard-connector", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },

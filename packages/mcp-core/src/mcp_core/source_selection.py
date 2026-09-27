@@ -38,6 +38,7 @@ KNOWN_SOURCES = frozenset(
         "nix",
         "holodilnik",
         "aliexpress",
+        "pepper",
         "compare",
     }
 )

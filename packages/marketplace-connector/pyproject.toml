@@ -29,6 +29,7 @@ dependencies = [
     "nix-connector",
     "holodilnik-connector",
     "aliexpress-connector",
+    "pepper-connector",
     "compare-connector",
 ]
 
@@ -58,4 +59,5 @@ regard-connector = { workspace = true }
 nix-connector = { workspace = true }
 holodilnik-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
+pepper-connector = { workspace = true }
 compare-connector = { workspace = true }

@@ -43,6 +43,7 @@ _SELFCHECKS: list[tuple[str, str, str]] = [
     ("nix", "nix_connector.server", "nix_selfcheck"),
     ("holodilnik", "holodilnik_connector.server", "holodilnik_selfcheck"),
     ("aliexpress", "aliexpress_connector.server", "aliexpress_selfcheck"),
+    ("pepper", "pepper_connector.server", "pepper_selfcheck"),
 ]
 
 

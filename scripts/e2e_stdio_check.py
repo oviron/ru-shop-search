@@ -40,6 +40,7 @@ EXPECTED_INSTALLED = {
     "nix",
     "holodilnik",
     "aliexpress",
+    "pepper",
 }
 
 TIMEOUT_S = 60.0

@@ -1,0 +1,15 @@
+{
+  "url": "https://www.pepper.ru/deals/mechrevo-yaoshi16-utral-noutbuk-igrovoy-689146",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:45:06 in the plugin's anonymous Chrome profile (no login), home IP, by navigating the tab to the URL. An expired deal page. Trimmed stand-in of document.documentElement.outerHTML: removed scripts, svg, images, style/onclick attributes, the /visit/ tracker links, author names and avatars, comments; JSON-LD kept without author and image.",
+  "ground_truth": {
+    "price": "219404.0 RUB (JSON-LD Offer)",
+    "merchant": "OZON",
+    "availability": "https://schema.org/OutOfStock",
+    "valid_until": "2026-09-16 23:59:00 +0300",
+    "published": "2026-08-17T11:31:37+03:00",
+    "temperature": "-64°",
+    "notice": "К сожалению, срок действия этой скидки истек 16 сентября, 2026."
+  },
+  "sha256": "3af8e84fbf5d58b124aaf3f34d38beb5e9bf9ad1ca268eb76e7434d601a32fc9"
+}
