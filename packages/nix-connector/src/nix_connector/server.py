@@ -41,6 +41,7 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
+from mcp_core.query_match import names_query
 from mcp_core.redact import redact_error_text as _redact
 from mcp_core.stopgate import SourceStoppedError
 from mcp_core.transport import proxy_from_env
@@ -166,13 +167,6 @@ def _search_item(row: str) -> NixSearchItemOut:
     )
 
 
-def _mentions_query(text: str, titles: list[str]) -> bool:
-    """Whether a row or a category chip names a query word; a 5-letter stem covers Russian endings."""
-    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
-    stems = [w[:5] for w in words if len(w) >= 3] or words
-    return any(stem in title.lower().replace("ё", "е") for title in titles for stem in stems)
-
-
 def _parse_extract(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, str) or len(raw.encode()) > _settings.max_body_bytes:
         raise_tool_error(TransportDownError("extracted page data missing or over the body cap", provider="nix"))
@@ -295,7 +289,7 @@ async def nix_search(
         warnings: list[str] = []
         items: list[NixSearchItemOut] = []
         groups = [g for g in payload.get("groups") or [] if isinstance(g, str)]
-        if parsed and not _mentions_query(text, [it.title or "" for it in parsed] + groups):
+        if parsed and not names_query(text, [it.title or "" for it in parsed] + groups):
             warnings.append(f"no_match: Nix has no match for {text!r}; its fuzzy results were unrelated and left out")
             total = 0
         else:

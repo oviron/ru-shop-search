@@ -50,6 +50,7 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
+from mcp_core.query_match import names_query
 from mcp_core.redact import redact_error_text as _redact
 from mcp_core.transport import proxy_from_env
 from mcp_core.transport.impersonated import Reply, shop_request
@@ -205,6 +206,11 @@ def _first_brand(raw: Any) -> str:
     return ""
 
 
+def _haystack(item: Any) -> str:
+    raw = _as_dict(item)
+    return " ".join([str(raw.get("title") or ""), _first_brand(raw.get("brands") or raw.get("brand"))])
+
+
 def _price_from(node: Any) -> float | None:
     """Pull a rouble amount out of the several shapes prices arrive in.
 
@@ -302,19 +308,6 @@ def _app_data(html: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _mentions_query(text: str, items: list[Any]) -> bool:
-    """Whether any row names a query word; a 5-letter stem covers Russian endings."""
-    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
-    stems = [w[:5] for w in words if len(w) >= 3] or words
-    for item in items:
-        raw = _as_dict(item)
-        hay = " ".join([str(raw.get("title") or ""), _first_brand(raw.get("brands") or raw.get("brand"))])
-        hay = hay.lower().replace("ё", "е")
-        if any(stem in hay for stem in stems):
-            return True
-    return False
-
-
 def _product_node(payload: Any) -> dict | None:
     """Unwrap the card payload, which nests the product under ``item``."""
     if isinstance(payload, dict):
@@ -401,7 +394,7 @@ async def detmir_search(
     warnings: list[str] = []
     # With no exact match the site still returns hundreds of popular goods; only then are suggestions empty.
     suggestions = _as_dict(data.get("search")).get("suggestions")
-    if products and not suggestions and not _mentions_query(text, catalog["items"]):
+    if products and not suggestions and not names_query(text, [_haystack(item) for item in catalog["items"]]):
         warnings.append(
             f"no_match: Detsky Mir has no match for {text!r}; its fuzzy results were unrelated and left out"
         )

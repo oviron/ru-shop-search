@@ -42,6 +42,7 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
+from mcp_core.query_match import names_query
 from mcp_core.redact import redact_error_text as _redact
 from mcp_core.transport import proxy_from_env
 from mcp_core.transport.impersonated import Reply, shop_request
@@ -232,13 +233,6 @@ def _blocks(page: str) -> list[str]:
     return [chunk.split("<script", 1)[0] for chunk in page.split(_BLOCK_START)[1:]]
 
 
-def _mentions_query(text: str, titles: list[str]) -> bool:
-    """Whether any row names a query word; a 5-letter stem covers Russian endings."""
-    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
-    stems = [w[:5] for w in words if len(w) >= 3] or words
-    return any(stem in title.lower().replace("ё", "е") for title in titles for stem in stems)
-
-
 async def _search_page(url: str) -> dict[str, Any]:
     """The page and the category the site sent the query to, if it did."""
     reply = await _get(url, "holodilnik_search")
@@ -319,7 +313,7 @@ async def holodilnik_search(
     total = R.coerce_int(total_match.group(1)) if total_match else None
     warnings: list[str] = []
     items: list[HolodilnikSearchItemOut] = []
-    if parsed and not _mentions_query(text, [it.title or "" for it in parsed]):
+    if parsed and not names_query(text, [it.title or "" for it in parsed]):
         warnings.append(
             f"no_match: Holodilnik has no match for {text!r}; its fuzzy results were unrelated and left out"
         )

@@ -33,6 +33,7 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
+from mcp_core.query_match import names_query as _mentions_query
 from mcp_core.redact import redact_error_text as _redact
 from mcp_core.transport.chrome_cdp import NavBlocked, NavigationPolicyError, open_page
 from pydantic import Field
@@ -330,13 +331,6 @@ def _item_from_payload(tile: dict[str, Any]) -> AliSearchItemOut:
         sku_id=sku_id,
         url=_item_url(item_id, sku_id) if _BARE_ID_RE.fullmatch(item_id) else None,
     )
-
-
-def _mentions_query(text: str, titles: list[str]) -> bool:
-    """Whether any title names a query word; a 5-letter stem covers Russian endings."""
-    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
-    stems = [w[:5] for w in words if len(w) >= 3] or words
-    return any(stem in title.lower().replace("ё", "е") for title in titles for stem in stems)
 
 
 def _unwrap_extract(raw: Any, what: str) -> dict[str, Any]:
