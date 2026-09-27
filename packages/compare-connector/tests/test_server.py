@@ -154,6 +154,44 @@ async def test_lamoda_search_rows_become_offers(monkeypatch):
     ]
 
 
+async def test_citilink_search_rows_become_offers(monkeypatch):
+    import json as _json
+    from contextlib import asynccontextmanager
+
+    from citilink_connector import server as citilink
+    from mcp_core.domtest import JsdomUnavailable, run_extractor
+
+    fixture = Path(__file__).parents[2] / "citilink-connector/tests/fixtures/search_rtx5070_live.html"
+    try:
+        payload = run_extractor(
+            citilink._SEARCH_EXTRACT_JS, fixture, page_url="https://www.citilink.ru/search/?text=rtx"
+        )
+    except JsdomUnavailable as exc:
+        pytest.skip(str(exc))
+
+    class Page:
+        async def evaluate(self, expression, arg=None):
+            return _json.dumps(payload, ensure_ascii=False)
+
+    @asynccontextmanager
+    async def open_page(url, wait_ms=5000, **kwargs):
+        yield Page()
+
+    monkeypatch.setattr(citilink, "open_page", open_page)
+    monkeypatch.setattr(citilink, "_min_gap", 0.0)
+    citilink._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"citilink": citilink})
+
+    offers = await server._search_citilink("rtx 5070", 4)
+
+    assert [(o.price_rub, o.rating, o.rating_count, o.in_stock) for o in offers] == [
+        (96690.0, 4.8, 13, True),
+        (94560.0, 4.9, 18, True),
+        (105500.0, 4.7, 7, True),
+        (None, 5.0, 2, False),
+    ]
+
+
 # ----------------------------------------------------------------- ranking ----
 
 

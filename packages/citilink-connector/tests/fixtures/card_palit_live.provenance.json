@@ -1,0 +1,15 @@
+{
+  "url": "https://www.citilink.ru/product/videokarta-palit-pci-e-rtx5070-infinity-3-nv-rtx5070-12gb-192bit-gddr7-2092141/",
+  "captured_at": "2026-09-27",
+  "sha256": "6354ca1e56458e8a1b0b101aceebf9d5775b42535a64b15b26bdc897ab669f03",
+  "method": "captured live on 2026-09-27 20:05:07 in the plugin's anonymous Chrome tab (200 in 0.5 s); rebuilt as a minimal page: the original <title>, an h1 and a __NEXT_DATA__ holding only productPage.productHeader.payload.productBase (fields id, name, slug, isAvailable, shortName, price, category, brand, rating, maxCountInStock, counters, isDiscount, accessMode, copied verbatim) and layoutMain.cityList.payload.city.name redacted to «Город по IP»; everything else in __NEXT_DATA__ (cookies, visitor address, anon id, csrf and auth tokens) dropped",
+  "ground_truth": {
+    "price_rub": 94560,
+    "old_price_rub": null,
+    "club_price": "0",
+    "is_available": true,
+    "rating": 4.9,
+    "review_count": 18,
+    "brand": "PALIT"
+  }
+}

@@ -56,7 +56,7 @@ _SHOPS: tuple[tuple[str, str, str], ...] = (
     ("ozon", "Ozon", "browser"),
     ("yandex_market", "Яндекс Маркет", "http"),
     ("dns", "DNS", "browser"),
-    ("citilink", "Ситилинк", "http+browser-token"),
+    ("citilink", "Ситилинк", "browser"),
     ("mvideo", "М.Видео", "http"),
     ("detsky_mir", "Детский мир", "http"),
     ("lamoda", "Лэмода", "http"),

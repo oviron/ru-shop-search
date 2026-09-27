@@ -617,9 +617,9 @@ async def _search_dns(query: str, limit: int) -> list[MarketOffer]:
 
 
 async def _search_citilink(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``citilink_search`` results (CDP tier; electronics)."""
+    """Adapt ``citilink_search`` results (the plugin's Chrome tab; electronics)."""
     server = SOURCES["citilink"]
-    response = await server.citilink_search(query=query)
+    response = await server.citilink_search(query=query, limit=min(limit, 48))
 
     offers: list[MarketOffer] = []
     for item in (getattr(response, "items", None) or [])[:limit]:
@@ -631,9 +631,9 @@ async def _search_citilink(query: str, limit: int) -> list[MarketOffer]:
                 brand="",
                 seller="",
                 price_rub=item.price_rub,
-                rating=None,
-                rating_count=None,
-                in_stock=None,
+                rating=item.rating,
+                rating_count=item.review_count,
+                in_stock=item.in_stock,
                 url=item.url or "",
             )
         )
@@ -1276,7 +1276,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "site promo, promo_until says when it ends"
             ),
             "dns": "reachable only through the operator's Chrome (Qrator)",
-            "citilink": "reachable only through the operator's Chrome (Qrator)",
+            "citilink": (
+                "search and cards through the plugin's Chrome tab; the club price is never used, "
+                "a sold-out row keeps in_stock=false and no price"
+            ),
             "aliexpress": (
                 "reachable only through the operator's Chrome (x5sec); a challenged session "
                 "surfaces as a transport error, and coupon prices are reported as warnings, "

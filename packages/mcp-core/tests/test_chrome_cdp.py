@@ -570,3 +570,11 @@ def test_goto_and_status_reports_a_block_page():
     page = chrome_cdp._RawCdpPage(ws, "T1")
 
     assert asyncio.run(page.goto_and_status("https://x/")) == 403
+
+
+def test_a_429_reloading_into_200_passes_when_the_caller_names_it(instant_sleep):
+    import asyncio
+
+    page = _StatusPage(429, 200)
+
+    assert asyncio.run(chrome_cdp._challenge_cleared(page, 429, grace_s=5, statuses=frozenset({429}))) is True

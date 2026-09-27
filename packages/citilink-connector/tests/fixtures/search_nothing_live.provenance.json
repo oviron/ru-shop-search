@@ -1,0 +1,9 @@
+{
+  "url": "https://www.citilink.ru/search/?text=zxqvwj%20pplkq",
+  "captured_at": "2026-09-27",
+  "sha256": "a186c76f07eed318aa6ce60f9ab6cde96332a8ba06e2a7eb13ebd95250c39366",
+  "method": "captured live on 2026-09-27 20:06:00 in the plugin's anonymous Chrome tab (200 at once); trimmed with jsdom to the city button, h1 and the ProductsCompilation carousel with its first two of 17 slides; same redactions as the rtx 5070 capture",
+  "ground_truth": {
+    "note": "h1 «По Вашему запросу «zxqvwj pplkq» ничего не найдено.»; no ProductListLayout; 17 priced «Хиты продаж» recommendations, 6 of them with a separate «Клубная цена» block (kept: Яндекс Плюс 4490 ₽ with club 4445 ₽)"
+  }
+}

@@ -1,345 +1,364 @@
-"""Offline tests for the Citilink connector.
-
-CDP rendering is monkeypatched out: the suite runs with no Chrome and no
-network. Fixtures mirror the tile/card extraction shapes from a rendered,
-Qrator-passed page.
-"""
+"""Offline tests for the Citilink connector: the Chrome tab is faked at ``open_page``."""
 
 from __future__ import annotations
+
+import json
+from contextlib import asynccontextmanager
 
 import pytest
 from citilink_connector import server
 from fastmcp.exceptions import ToolError
+from mcp_core.pacing import Pacer
+from mcp_core.stopgate import StopGate
+from mcp_core.transport.chrome_cdp import NavBlocked
 
-SEARCH_EXTRACTED = {
-    "title": "ноутбук — DNS",
+SLUG = "videokarta-palit-pci-e-rtx5070-infinity-3-nv-rtx5070-12gb-192bit-gddr7-2092141"
+CARD_URL = f"https://www.citilink.ru/product/{SLUG}/"
+TITLE = "rtx 5070 - купить по низкой цене в Ситилинк"
+
+SEARCH_PAYLOAD = {
+    "title": TITLE,
+    "city": "Город по IP",
+    "nothing": False,
     "items": [
         {
-            "product_id": "5f4dcc3b5aa764d61d8327de",
-            "title": "Ноутбук Lenovo IdeaPad 3",
-            "price_meta": "52999",
-            "price_text": "52 999₽",
-            "old_price_text": "62 999",
-            "price_texts": {"attached": ["52 999₽"], "other": ["62 999"]},
-            "url": "https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/noutbuk-lenovo/",
+            "url": CARD_URL,
+            "title": "Видеокарта Palit NVIDIA  GeForce RTX 5070 PA-RTX5070 Infinity 3",
+            "price": "94560",
+            "old_price_text": None,
+            "rating": "4.9",
+            "reviews": "18",
+            "buyable": True,
+            "awaited": False,
         },
         {
-            "product_id": "5f4dcc3b5aa764d61d8327df",
-            "title": "Ноутбук без цены",
-            "price_meta": None,
-            "price_text": None,
+            "url": "https://www.citilink.ru/product/videokarta-asus-tuf-rtx5070-2088716/",
+            "title": "Видеокарта ASUS TUF RTX 5070",
+            "price": "105500",
+            "old_price_text": "114 000",
+            "rating": "4.7",
+            "reviews": "7",
+            "buyable": True,
+            "awaited": False,
+        },
+        {
+            "url": "https://www.citilink.ru/product/videokarta-asus-prime-rtx5070ti-2078988/",
+            "title": "Видеокарта ASUS PRIME RTX 5070 Ti",
+            "price": None,
             "old_price_text": None,
-            "price_texts": {"attached": [], "other": []},
-            "url": "",
+            "rating": "5",
+            "reviews": "2",
+            "buyable": False,
+            "awaited": True,
         },
     ],
 }
-
-CARD_EXTRACTED = {
-    "title": "Ноутбук Lenovo IdeaPad 3 15ITL6",
-    "price_rub": 52999.0,
-    "old_price_rub": 62999.0,
-    "is_available": True,
-    "page_title": "Ноутбук Lenovo IdeaPad 3 — DNS",
+NOTHING_PAYLOAD = {
+    "title": "zxqvwj - купить по низкой цене в Ситилинк",
+    "city": "Город по IP",
+    "nothing": True,
+    "items": [],
+}
+CARD_PAYLOAD = {
+    "title": "Видеокарта Palit … – купить в Ситилинк | 2092141",
+    "not_found": False,
+    "city": "Город по IP",
+    "product": {
+        "id": "2092141",
+        "name": "Видеокарта Palit NVIDIA  GeForce RTX 5070 PA-RTX5070 Infinity 3 12ГБ",
+        "isAvailable": True,
+        "price": {"current": "94560", "old": "99990", "club": "93000"},
+        "brand": {"id": "PALIT", "name": "PALIT"},
+        "rating": 4.9,
+        "counters": {"opinions": 18, "reviews": 0},
+    },
 }
 
 
+class FakePage:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def evaluate(self, expression, arg=None):
+        return json.dumps(self.payload, ensure_ascii=False)
+
+
+def fake_tab(monkeypatch, *outcomes) -> list[dict]:
+    """Each outcome is a payload dict (the extractor's JSON) or a NavBlocked to raise."""
+    calls: list[dict] = []
+    queue = list(outcomes)
+
+    @asynccontextmanager
+    async def open_page(url, wait_ms=5000, **kwargs):
+        calls.append({"url": url, **kwargs})
+        outcome = queue.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        yield FakePage(outcome)
+
+    monkeypatch.setattr(server, "open_page", open_page)
+    return calls
+
+
 @pytest.fixture(autouse=True)
-def _no_cache(monkeypatch):
-    server._cache._data.clear()
+def fresh_state(monkeypatch):
+    server._cache.clear()
+    monkeypatch.setattr(server, "_pacer", Pacer(0.0, source="citilink", gate=StopGate(None)))
+    monkeypatch.setattr(server, "_min_gap", 0.0)
+    monkeypatch.setattr(server, "_RENDER_WAIT_MS", 0)
+    yield
+    server._cache.clear()
 
 
-def _patch_render(monkeypatch, payload):
-    async def fake_render(url, extract_js, wait_ms, ctx):
-        return payload
-
-    monkeypatch.setattr(server, "_cdp_render", fake_render)
+def error_payload(err: ToolError) -> dict:
+    return json.loads(str(err))
 
 
-# ------------------------------------------------------------------ citilink_search ----
+# ------------------------------------------------------------------ search ----
 
 
-async def test_search_parses_tiles(monkeypatch):
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
+async def test_search_opens_the_sites_search_with_the_429_grace(monkeypatch):
+    calls = fake_tab(monkeypatch, SEARCH_PAYLOAD)
 
-    result = await server.citilink_search("ноутбук")
+    result = await server.citilink_search("rtx  5070")
 
-    assert result.count == 2
-    assert result.items[0].product_id == "5f4dcc3b5aa764d61d8327de"
-    assert result.items[0].price_rub == 52999.0
-
-
-async def test_search_a_pricelss_tile_is_none_never_zero(monkeypatch):
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
-
-    result = await server.citilink_search("ноутбук")
-
-    assert result.items[1].price_rub is None
-    assert result.items[1].price_rub != 0
+    assert calls[0]["url"] == "https://www.citilink.ru/search/?text=rtx%205070"
+    assert 429 in calls[0]["challenge_statuses"]
+    assert calls[0]["challenge_grace_s"] > 0
+    assert (result.tier_used, result.city, result.count) == ("cdp", "Город по IP", 3)
 
 
-async def test_search_maps_zero_tiles_to_parser_drift(monkeypatch):
-    _patch_render(monkeypatch, {"title": "ноутбук", "items": []})
+async def test_search_rows_carry_price_discount_rating_and_stock(monkeypatch):
+    fake_tab(monkeypatch, SEARCH_PAYLOAD)
+
+    items = (await server.citilink_search("rtx 5070")).items
+
+    assert [(i.price_rub, i.old_price_rub, i.rating, i.review_count, i.in_stock) for i in items] == [
+        (94560.0, None, 4.9, 18, True),
+        (105500.0, 114000.0, 4.7, 7, True),
+        (None, None, 5.0, 2, False),
+    ]
+    assert (items[0].product_id, items[0].url) == (SLUG, CARD_URL)
+    assert items[0].title == "Видеокарта Palit NVIDIA GeForce RTX 5070 PA-RTX5070 Infinity 3"
+
+
+async def test_a_sold_out_row_without_price_is_not_a_warning(monkeypatch):
+    fake_tab(monkeypatch, SEARCH_PAYLOAD)
+
+    assert (await server.citilink_search("rtx 5070")).meta.warnings == []
+
+
+async def test_a_buyable_row_without_price_is_reported(monkeypatch):
+    payload = json.loads(json.dumps(SEARCH_PAYLOAD))
+    payload["items"][0]["price"] = None
+    fake_tab(monkeypatch, payload)
+
+    assert (await server.citilink_search("rtx 5070")).meta.warnings == [f"{SLUG}: no_price"]
+
+
+async def test_limit_cuts_the_first_page(monkeypatch):
+    fake_tab(monkeypatch, SEARCH_PAYLOAD)
+
+    assert (await server.citilink_search("rtx 5070", limit=1)).count == 1
+
+
+async def test_nothing_found_is_an_honest_empty_result(monkeypatch):
+    fake_tab(monkeypatch, NOTHING_PAYLOAD)
+
+    result = await server.citilink_search("zxqvwj")
+
+    assert result.count == 0
+    assert result.meta.warnings == ["empty: Citilink found nothing for 'zxqvwj'"]
+
+
+async def test_a_page_with_neither_results_nor_nothing_found_is_drift(monkeypatch):
+    fake_tab(monkeypatch, {"title": TITLE, "city": None, "nothing": False, "items": []})
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_search("rtx 5070")
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
+
+
+async def test_a_second_search_comes_from_the_cache(monkeypatch):
+    calls = fake_tab(monkeypatch, SEARCH_PAYLOAD)
+
+    await server.citilink_search("rtx 5070")
+    result = await server.citilink_search("rtx 5070")
+
+    assert (result.tier_used, len(calls)) == ("cache", 1)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [NavBlocked(429), NavBlocked(403), {"title": "Загрузка...", "items": [], "nothing": False}],
+    ids=["429 that stayed", "403", "loading page"],
+)
+async def test_a_refusal_stops_citilink_after_one_tab(monkeypatch, outcome):
+    calls = fake_tab(monkeypatch, outcome, SEARCH_PAYLOAD)
 
     with pytest.raises(ToolError):
-        await server.citilink_search("ноутбук")
+        await server.citilink_search("rtx 5070")
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_search("rtx 5070")
+    assert error_payload(excinfo.value)["source_stopped"] is True
+    assert len(calls) == 1
 
 
-# -------------------------------------------------------------------- citilink_card ----
+async def test_a_server_error_is_not_a_stop(monkeypatch):
+    calls = fake_tab(monkeypatch, NavBlocked(502), SEARCH_PAYLOAD)
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_search("rtx 5070")
+    assert error_payload(excinfo.value)["error"] == "transport_down"
+    assert (await server.citilink_search("rtx 5070")).count == 3
+    assert len(calls) == 2
 
 
-async def test_card_parses_the_product(monkeypatch):
-    _patch_render(monkeypatch, CARD_EXTRACTED)
-
-    result = await server.citilink_card("https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/noutbuk-lenovo/")
-
-    assert result.product_id == "5f4dcc3b5aa764d61d8327de"
-    assert result.price_rub == 52999.0
-    assert result.is_available is True
+# -------------------------------------------------------------------- card ----
 
 
-async def test_card_rejects_a_url_without_a_product_id():
-    with pytest.raises(ToolError):
-        await server.citilink_card("https://www.citilink.ru/catalog/notebooks/")
+async def test_card_reads_the_product_and_ignores_the_club_price(monkeypatch):
+    calls = fake_tab(monkeypatch, CARD_PAYLOAD)
+
+    card = await server.citilink_card(CARD_URL + "?utm_source=x#frag")
+
+    assert calls[0]["url"] == CARD_URL
+    assert (card.product_id, card.brand, card.city) == (SLUG, "PALIT", "Город по IP")
+    assert (card.price_rub, card.old_price_rub, card.is_available) == (94560.0, 99990.0, True)
+    assert (card.rating, card.review_count) == (4.9, 18)
+    assert card.title == "Видеокарта Palit NVIDIA GeForce RTX 5070 PA-RTX5070 Infinity 3 12ГБ"
+    assert card.meta.warnings == []
 
 
-async def test_card_flags_drift_when_neither_title_nor_price(monkeypatch):
-    payload = {"title": None, "price_rub": None, "old_price_rub": None, "is_available": None, "page_title": "DNS"}
-    _patch_render(monkeypatch, payload)
+async def test_card_without_reviews_has_no_rating(monkeypatch):
+    payload = json.loads(json.dumps(CARD_PAYLOAD))
+    payload["product"]["counters"]["opinions"] = 0
+    fake_tab(monkeypatch, payload)
 
-    with pytest.raises(ToolError):
-        await server.citilink_card("https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/x/")
+    card = await server.citilink_card(CARD_URL)
 
-
-async def test_card_warns_when_in_stock_but_no_price_matched(monkeypatch):
-    """An available card with no price block is suspicious: the buy-block
-    layout most likely moved (anchors no longer match). Say so loudly in
-    meta.warnings instead of silently handing back price_rub=None."""
-    payload = {
-        "title": "Ноутбук Lenovo IdeaPad 3 15ITL6",
-        "price_meta": None,
-        "price_text": None,
-        "old_price_text": None,
-        "price_texts": {"attached": [], "other": []},
-        "is_available": True,
-        "page_title": "Ноутбук — Citilink",
-    }
-    _patch_render(monkeypatch, payload)
-
-    result = await server.citilink_card("https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/noutbuk-lenovo/")
-
-    assert result.price_rub is None
-    assert result.is_available is True
-    assert any(w.startswith("in_stock_no_price") for w in result.meta.warnings)
-    assert result.meta.healthy is False
+    assert (card.rating, card.review_count) == (None, 0)
 
 
-async def test_card_stays_silent_when_unavailable_and_unpriced(monkeypatch):
-    """No stock and no price is a normal, expected combination (the buy block
-    is simply absent) — it must not raise the in-stock canary."""
-    payload = {
-        "title": "Ноутбук Lenovo IdeaPad 3 15ITL6",
-        "price_meta": None,
-        "price_text": None,
-        "old_price_text": None,
-        "price_texts": {"attached": [], "other": []},
-        "is_available": False,
-        "page_title": "Ноутбук — Citilink",
-    }
-    _patch_render(monkeypatch, payload)
+async def test_an_available_card_without_price_warns(monkeypatch):
+    payload = json.loads(json.dumps(CARD_PAYLOAD))
+    payload["product"]["price"] = {"current": "0", "old": "0"}
+    fake_tab(monkeypatch, payload)
 
-    result = await server.citilink_card("https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/noutbuk-lenovo/")
+    card = await server.citilink_card(CARD_URL)
 
-    assert result.price_rub is None
-    assert not any(w.startswith("in_stock_no_price") for w in result.meta.warnings)
-    assert result.meta.healthy is True
+    assert card.price_rub is None
+    assert card.meta.warnings == ["in_stock_no_price: the card is available but carries no price"]
 
 
-# ------------------------------------------------------------- citilink_selfcheck ----
+async def test_an_unknown_product_is_not_found(monkeypatch):
+    fake_tab(monkeypatch, {"title": "Страница не найдена – Ситилинк", "not_found": True, "city": None, "product": None})
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_card(CARD_URL)
+    assert error_payload(excinfo.value)["error"] == "not_found"
 
 
-async def test_selfcheck_healthy_when_tiles_extract(monkeypatch):
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
+async def test_a_card_that_opened_another_product_is_not_found(monkeypatch):
+    payload = json.loads(json.dumps(CARD_PAYLOAD))
+    payload["product"]["id"] = "2092508"
+    fake_tab(monkeypatch, payload)
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_card(CARD_URL)
+    assert error_payload(excinfo.value)["error"] == "not_found"
+
+
+async def test_a_card_without_product_data_is_drift(monkeypatch):
+    fake_tab(
+        monkeypatch, {"title": "Видеокарта – купить в Ситилинк", "not_found": False, "city": None, "product": None}
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_card(CARD_URL)
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
+
+
+async def test_card_accepts_a_bare_slug(monkeypatch):
+    calls = fake_tab(monkeypatch, CARD_PAYLOAD)
+
+    await server.citilink_card(SLUG)
+
+    assert calls[0]["url"] == CARD_URL
+
+
+# ------------------------------------------------------------- input guard ----
+
+_OFF_HOST_URLS = [
+    "https://evil.example/product/noutbuk-lenovo-2169270/",
+    "https://citilink.ru.evil.example/product/noutbuk-lenovo-2169270/",
+    "http://127.0.0.1:9222/product/noutbuk-lenovo-2169270/",
+    "//evil.example/product/noutbuk-lenovo-2169270/",
+    "file:///etc/passwd#/product/noutbuk-lenovo-2169270",
+    "javascript:fetch('/product/noutbuk-lenovo-2169270')",
+    "https://www.citilink.ru/catalog/noutbuki/",
+]
+
+
+@pytest.mark.parametrize("hostile", _OFF_HOST_URLS)
+async def test_card_refuses_input_without_a_citilink_product(monkeypatch, hostile):
+    calls = fake_tab(monkeypatch)
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.citilink_card(hostile)
+    assert error_payload(excinfo.value)["error"] == "bad_request"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    ["/product/x?utm=1&redirect=evil", "/product/..", "/product/%2e%2e%2f%2e%2e", "/product/x#@evil.example"],
+)
+def test_an_id_never_carries_query_fragment_or_traversal(hostile):
+    got = server._extract_product_id(hostile)
+    assert got is None or all(ch not in got for ch in "?#%./\\")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://www.citilink.ru/product/noutbuk-lenovo-2169270/", "noutbuk-lenovo-2169270"),
+        ("https://www.citilink.ru/product/noutbuk-lenovo-2169270/otzyvy/", "noutbuk-lenovo-2169270"),
+        ("noutbuk-lenovo-2169270", "noutbuk-lenovo-2169270"),
+    ],
+)
+def test_extract_product_id(raw, expected):
+    assert server._extract_product_id(raw) == expected
+
+
+# --------------------------------------------------------------- selfcheck ----
+
+
+async def test_selfcheck_healthy_after_search_and_card(monkeypatch):
+    calls = fake_tab(monkeypatch, SEARCH_PAYLOAD, CARD_PAYLOAD)
 
     result = await server.citilink_selfcheck()
 
     assert result.status == "success"
-    assert result.healthy is True
+    assert {name: check.state for name, check in result.checks.items()} == {"search": "healthy", "card": "healthy"}
+    assert calls[1]["url"] == CARD_URL
 
 
-async def test_selfcheck_zero_tiles_is_drift(monkeypatch):
-    _patch_render(monkeypatch, {"title": "x", "items": []})
-
-    result = await server.citilink_selfcheck()
-
-    assert result.status == "drift_detected"
-
-
-async def test_selfcheck_healthy_tiles_carry_the_shape_reference(monkeypatch):
-    """Tiles extracting is not enough: the shape must still match the captured
-    reference. A matching payload says so explicitly."""
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
+async def test_selfcheck_refusal_is_inconclusive_and_skips_the_card(monkeypatch):
+    calls = fake_tab(monkeypatch, NavBlocked(403))
 
     result = await server.citilink_selfcheck()
 
-    entry = result.checks["search"]
-    assert entry.state == "healthy"
-    assert "shape matches the captured reference" in entry.notes
-
-
-async def test_selfcheck_reports_shape_drift_when_a_required_path_vanishes(monkeypatch):
-    """A page that still yields tiles but lost a parser-critical field is
-    structural drift — loud, with the missing path named."""
-    drifted = {
-        "title": SEARCH_EXTRACTED["title"],
-        "items": [
-            {key: value for key, value in item.items() if key != "price_text"} for item in SEARCH_EXTRACTED["items"]
-        ],
+    assert {name: check.state for name, check in result.checks.items()} == {
+        "search": "inconclusive",
+        "card": "inconclusive",
     }
-    _patch_render(monkeypatch, drifted)
+    assert len(calls) == 1
+
+
+async def test_selfcheck_drift_when_the_page_shape_moves(monkeypatch):
+    fake_tab(monkeypatch, {"title": TITLE, "city": None, "nothing": False, "items": []})
 
     result = await server.citilink_selfcheck()
 
-    assert result.status == "drift_detected"
-    entry = result.checks["search"]
-    assert entry.state == "drift"
-    assert entry.reason == "shape_drift"
-    assert any("items[].price_text" in note for note in entry.notes)
-
-
-# ------------------------------------------------------------------- helpers ----
-
-
-def test_extract_product_id():
-    assert (
-        server._extract_product_id("https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/x/")
-        == "5f4dcc3b5aa764d61d8327de"
-    )
-    assert server._extract_product_id("https://www.citilink.ru/catalog/x/") is None
-
-
-# ------------------------------------------------------------------- SSRF guard ----
-#
-# citilink_card renders in the operator's own Chrome, carrying whatever cookies
-# that profile holds. So the navigated host must come from SITE_BASE and never
-# from the argument. The id used to be extracted purely as a validity gate while
-# the raw argument was navigated, which let any host carrying /product/<24-hex>
-# anywhere in its path drive the logged-in browser.
-
-_OFF_HOST_URLS = [
-    "https://evil.example/product/5f4dcc3b5aa764d61d8327de/x/",
-    "https://citilink.ru.evil.example/product/5f4dcc3b5aa764d61d8327de/",
-    "http://127.0.0.1:9222/product/5f4dcc3b5aa764d61d8327de/",
-    "//evil.example/product/5f4dcc3b5aa764d61d8327de/",
-    "file:///etc/passwd#/product/5f4dcc3b5aa764d61d8327de",
-    "javascript:fetch('/product/5f4dcc3b5aa764d61d8327de')",
-]
-
-
-@pytest.mark.parametrize("hostile", _OFF_HOST_URLS)
-def test_extract_product_id_refuses_off_host_urls(hostile):
-    assert server._extract_product_id(hostile) is None
-
-
-@pytest.mark.parametrize("hostile", _OFF_HOST_URLS)
-async def test_card_refuses_off_host_urls(monkeypatch, hostile):
-    def explode(*_args, **_kwargs):
-        raise AssertionError(f"card must not navigate an off-host URL: {hostile!r}")
-
-    monkeypatch.setattr(server, "_cdp_render", explode)
-
-    with pytest.raises(ToolError):
-        await server.citilink_card(hostile)
-
-
-async def test_card_navigates_a_rebuilt_site_base_url(monkeypatch):
-    """Even for a legitimate URL, we navigate our own construction, not theirs."""
-    seen: list[str] = []
-
-    async def capture(url, extract_js, wait_ms, ctx):
-        seen.append(url)
-        return CARD_EXTRACTED
-
-    monkeypatch.setattr(server, "_cdp_render", capture)
-
-    await server.citilink_card(
-        "https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/noutbuk-lenovo/?utm_source=x#frag"
-    )
-
-    assert seen == ["https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/"]
-
-
-async def test_card_accepts_a_bare_product_id(monkeypatch):
-    seen: list[str] = []
-
-    async def capture(url, extract_js, wait_ms, ctx):
-        seen.append(url)
-        return CARD_EXTRACTED
-
-    monkeypatch.setattr(server, "_cdp_render", capture)
-
-    result = await server.citilink_card("5f4dcc3b5aa764d61d8327de")
-
-    assert result.product_id == "5f4dcc3b5aa764d61d8327de"
-    assert seen == ["https://www.citilink.ru/product/5f4dcc3b5aa764d61d8327de/"]
-
-
-# ----------------------------------------------------------- real id formats ----
-#
-# The original pattern demanded 24 hex characters — a MongoDB ObjectId shape
-# citilink.ru does not use — so every search parsed zero tiles and the connector
-# reported drift. It shipped because the fixtures above invented ids in the
-# same wrong shape the parser expected, so the suite agreed with the bug.
-#
-# These are routes observed live on citilink.ru in July 2026. If the parser ever
-# stops understanding them again, this is the test that says so.
-
-_REAL_URLS = [
-    ("https://www.citilink.ru/product/noutbuk-lenovo-2169270/", "noutbuk-lenovo-2169270"),
-    ("https://www.citilink.ru/product/2169270/", "2169270"),
-]
-
-
-@pytest.mark.parametrize(("url", "expected"), _REAL_URLS)
-def test_real_product_urls_yield_their_id(url, expected):
-    assert server._extract_product_id(url) == expected
-
-
-@pytest.mark.parametrize(("_url", "bare"), _REAL_URLS)
-def test_a_real_bare_id_is_accepted(_url, bare):
-    """The tool docstring promises "a product id or a URL"; honour both."""
-    assert server._extract_product_id(bare) == bare
-
-
-# The id is interpolated back into a URL opened in the operator's logged-in
-# Chrome, so it must not be able to carry a query string, a fragment, an
-# encoded slash or a traversal step. The host guard alone does not cover this:
-# these all stay on-site and would still be rendered with the operator's cookies.
-_INJECTION_INPUTS = [
-    "/product/x?utm=1&redirect=evil",
-    "/product/..",
-    "/product/%2e%2e%2f%2e%2e",
-    "/product/x#@evil.example",
-    "/product/x%00",
-]
-
-
-@pytest.mark.parametrize("hostile", _INJECTION_INPUTS)
-def test_an_id_never_carries_query_fragment_or_traversal(hostile):
-    got = server._extract_product_id(hostile)
-    if got is None:
-        return
-    assert all(ch not in got for ch in "?#%./\\"), f"id {got!r} would alter the rebuilt URL"
-
-
-def test_the_dom_extractor_and_the_python_parser_agree():
-    """Search and card must read the same id shape.
-
-    If the JS running in the page pulls one charset and the Python parser
-    accepts another, search hands back ids the card cannot reopen — a mismatch
-    that looks like a marketplace problem and is ours. This is how the 24-hex
-    bug half-survived its first fix: the two sides were changed to different
-    patterns.
-    """
-    assert "[A-Za-z0-9_-]+" in server._SEARCH_EXTRACT_JS, "the search extractor JS no longer uses the shared id charset"
-    assert server._ID_CHARS == "[A-Za-z0-9_-]", "the Python id charset moved; update the JS to match"
+    assert result.checks["search"].state == "drift"

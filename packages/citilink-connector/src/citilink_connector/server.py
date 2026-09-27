@@ -1,21 +1,8 @@
-"""Citilink MCP connector.
+"""Citilink MCP connector: search and product cards, read in the plugin's Chrome tab.
 
-Citilink sits behind Qrator's JavaScript proof-of-work: every dynamic page answers
-HTTP 401 with a ~349 KB challenge script, and the one route not behind it
-(``/ajax-state/product-buy/``) wants a CSRF token you can only get from a page
-that *is* behind it. No header trick clears a proof-of-work — but a real
-Chrome executes it natively, so every read here runs in the operator's browser
-over CDP and parses the rendered DOM.
-
-Verified live July 2026 from a datacenter IP (docs/ANTI_BOT.md):
-  - every dynamic page — 401 + Qrator challenge
-  - ``restapi.citilink.ru`` — 403 even from residential (internal SSR address)
-  - anonymously reachable: ``robots.txt``, ``sitemap.xml`` (~600k product URLs)
-
-The CDP route needs verification from the operator's machine: the DOM tile
-selectors below are written against the public catalog layout, and only a
-challenge-passed session can confirm them. Run citilink_selfcheck from your Chrome
-first — its verdict tells you which case you are in.
+A tab without Citilink's ``_pcl`` cookie gets a 429 «Загрузка...» page that reloads
+itself into 200 (live, 2026-09-27); plain HTTP never gets past it. Search reads the
+rendered result tiles; the card reads the product from the page's ``__NEXT_DATA__``.
 
 NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC.
 """
@@ -30,14 +17,13 @@ import urllib.parse
 from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
-from fastmcp.server.middleware.error_handling import RetryMiddleware
 from mcp.types import ToolAnnotations
 from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
-from mcp_core.dom import JS_HELPERS, prices_from_tile, title_from_tile
 from mcp_core.errors import (
     BadRequestError,
     ConnectorError,
+    NotFoundError,
     ParserDriftError,
     ToolError,
     TransportDownError,
@@ -47,6 +33,7 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
+from mcp_core.stopgate import SourceStoppedError
 from mcp_core.transport.chrome_cdp import NavBlocked, open_page
 from pydantic import Field
 
@@ -58,7 +45,6 @@ from citilink_connector.models_output import (
     MetaOut,
 )
 from citilink_connector.settings import get_settings
-from citilink_connector.shape_reference import SEARCH_REQUIRED_KEYS, SEARCH_SHAPE_REFERENCE
 
 _settings = get_settings()
 
@@ -68,59 +54,39 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 SITE_BASE = "https://www.citilink.ru"
 SEARCH_URL = f"{SITE_BASE}/search/"
 
-TIMEOUT = _settings.timeout
 MAX_BODY_BYTES = _settings.max_body_bytes
 _min_gap = _settings.min_gap
 
-# Real product routes, confirmed live July 2026 from a challenge-passed session:
-#   citilink  /product/noutbuk-lenovo-2169270/   slug ending in a numeric id
-#   dns       /product/b7a1667f9b19ed20/         16-hex id
-# The original pattern demanded 24 hex — a MongoDB ObjectId shape neither site
-# uses — so every search returned zero tiles and reported drift.
-#
-# The charset is deliberately narrower than "anything but a slash". This id is
-# interpolated straight back into a URL that opens in the operator's logged-in
-# Chrome, so `?`, `#`, `%` and `.` stay out: they would let a caller append a
-# query string or walk the path on a page we then render with their cookies.
+# The id is interpolated back into a URL opened in the plugin's Chrome, so `?`, `#`,
+# `%` and `.` stay out: they would let a caller append a query or walk the path.
 _ID_CHARS = r"[A-Za-z0-9_-]"
 _PRODUCT_ID_RE = re.compile(rf"/product/({_ID_CHARS}+)")
 _BARE_ID_RE = re.compile(rf"{_ID_CHARS}{{4,}}")
+_TRAILING_NUMBER_RE = re.compile(r"(\d+)$")
+
+_REFUSAL_STATUSES = frozenset({401, 403, 429})
+# The 429 «Загрузка...» page reloads itself into 200 in ~1.5 s (live, 2026-09-27).
+_CHALLENGE_STATUSES = frozenset({401, 403, 429})
+_CHALLENGE_GRACE_S = 12.0
+_RENDER_WAIT_MS = 8000
 
 mcp = FastMCP(
     name="citilink-connector",
     version=SERVER_VERSION,
     instructions=(
-        "Citilink electronics catalog: search and product cards. Every read "
-        "runs in the operator's own Chrome over CDP — Qrator's proof-of-work "
-        "blocks all anonymous access. Start with citilink_search; citilink_card takes a "
-        "product id or citilink.ru product URL."
+        "Citilink electronics catalog: search and product cards, read in the plugin's "
+        "Chrome tab. Start with citilink_search; citilink_card takes a product id or "
+        "citilink.ru product URL."
     ),
 )
-mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
 _pacer = Pacer(_min_gap, source="citilink")
 _cdp_lock = asyncio.Lock()
 
 
-async def _polite_wait() -> None:
-    """Space this source's requests out, and back off if it refused us.
-
-    Reads ``_min_gap`` at call time so an operator or a test can retune the
-    pace without rebuilding the pacer.
-    """
-    await _pacer.wait(min_gap=_min_gap)
-
-
 def _extract_product_id(raw: str) -> str | None:
-    """Pull the product id out of a citilink.ru product URL or a bare id.
-
-    Host-checked on purpose. The id is the only thing that survives this
-    function, and the card URL is rebuilt from SITE_BASE, so a caller cannot
-    smuggle ``/product/<id>`` into a path on someone else's domain and
-    steer the operator's logged-in Chrome there. Anything that is not
-    citilink.ru, or carries a scheme we do not navigate, returns None.
-    """
+    """The product slug from a citilink.ru product URL or a bare id; None for anything off-site."""
     raw = raw.strip()
     if not raw:
         return None
@@ -135,180 +101,185 @@ def _extract_product_id(raw: str) -> str | None:
             return None
         raw = parts.path
     elif raw.startswith("//"):
-        # Scheme-relative: the authority is someone else's, so treat it as off-host.
         return None
     match = _PRODUCT_ID_RE.search(raw)
     return match.group(1).lower() if match else None
 
 
-_SEARCH_EXTRACT_TEMPLATE = """
+# Only ProductListLayout holds real results: on «ничего не найдено» the page shows
+# priced ProductsCompilation recommendations instead (live, 2026-09-27).
+_SEARCH_EXTRACT_JS = """
 () => {
-    //__SHARED_HELPERS__
-    // Search results render inside an iframe in at least one of this site's
-    // layouts — confirmed live in July 2026, where the top-level document held
-    // zero product anchors while the grid sat in a same-origin frame. Reading
-    // only `document` makes that layout look like a dead parser. Collect the
-    // frames we are allowed to read and treat them as one page.
+    const text = el => el ? ((el.textContent || '').replace(/\\s+/g, ' ').trim() || null) : null;
+    const h1 = text(document.querySelector('h1'));
+    // July 2026 saw a layout with the grid inside a same-origin iframe.
     const docs = [document];
     for (const frame of document.querySelectorAll('iframe')) {
-        try {
-            if (frame.contentDocument) docs.push(frame.contentDocument);
-        } catch (e) {
-            // Cross-origin frame: not ours to read, and not where our tiles are.
-        }
+        try { if (frame.contentDocument) docs.push(frame.contentDocument); } catch (e) {}
     }
-    const ID_RE = /\\/product\\/([A-Za-z0-9_-]+)/;
-    const out = [];
-    const anchors = [];
-    for (const doc of docs) {
-        for (const a of doc.querySelectorAll('a[href*="/product/"]')) anchors.push(a);
-    }
-    const seen = new Set();
-    for (const a of anchors) {
-        const href = a.href || '';
-        const m = href.match(ID_RE);
-        if (!m || seen.has(m[1])) continue;
-        seen.add(m[1]);
-        // Outermost ancestor still covering one product, NOT closest(): the
-        // first product anchor in a tile is often an empty image/overlay link
-        // whose own class matches a [class*="product"] pattern, and closest()
-        // tests the element itself first.
-        const card = tileRootFor(a, ID_RE);
-
-        // Citilink's class names are build-hashed (app-catalog-51bw0j-...), so they
-        // are not selectable across deploys. What IS stable is the data-meta-*
-        // contract the site uses for its own analytics — verified on captured
-        // markup 2026-07-28:
-        //   data-meta-name="Snippet__title"      the product name anchor
-        //   data-meta-name="Snippet__price"      current price (₽ in a CHILD span)
-        //   data-meta-name="Snippet__old-price"  strikethrough price, no glyph
-        //   data-meta-price="59990"              machine-readable numeric price
-        // The first anchor in a tile is an EMPTY overlay link, so anchor text can
-        // never be the title source here.
-        const titleEl = card.querySelector('[data-meta-name="Snippet__title"]');
-        let title = cleanText(titleEl) || (titleEl && titleEl.getAttribute('title'));
-        if (!title) {
-            let fallback = null;
-            for (const cand of card.querySelectorAll('a[href*="/product/"], [class*="name"], [class*="title"]')) {
-                if (cleanText(cand)) { fallback = cand; break; }
+    let list = null;
+    for (const doc of docs) { list = list || doc.querySelector('[data-meta-name="ProductListLayout"]'); }
+    const tiles = list
+        ? list.querySelectorAll('[data-meta-name="ProductVerticalSnippet"], [data-meta-name="ProductHorizontalSnippet"]')
+        : [];
+    const items = [];
+    for (const tile of tiles) {
+        const titleEl = tile.querySelector('[data-meta-name="Snippet__title"]');
+        let href = titleEl ? titleEl.getAttribute('href') : null;
+        if (!href) {
+            for (const a of tile.querySelectorAll('a[href^="/product/"]')) {
+                const candidate = a.getAttribute('href');
+                if (/^\\/product\\/[A-Za-z0-9_-]+\\/$/.test(candidate)) { href = candidate; break; }
             }
-            title = cleanText(fallback) || a.getAttribute('title') || null;
         }
-
-        // data-meta-price is exact and needs no parsing; keep the display strings
-        // as a fallback for the day the attribute goes away.
-        const metaPriceEl = card.querySelector('[data-meta-price]');
-        const metaPrice = metaPriceEl ? metaPriceEl.getAttribute('data-meta-price') : null;
-        const priceEl = card.querySelector('[data-meta-name="Snippet__price"]');
-        const oldPriceEl = card.querySelector('[data-meta-name="Snippet__old-price"]');
-
-        const candidates = priceTextsIn(card);
-        out.push({
-            product_id: m[1],
-            title: title,
-            price_meta: metaPrice,
-            price_text: cleanText(priceEl),
-            old_price_text: cleanText(oldPriceEl),
-            price_texts: candidates,
-            url: href
+        const img = tile.querySelector('img[alt]');
+        const price = tile.querySelector('[data-meta-name="Snippet__price"] [data-meta-price]');
+        items.push({
+            url: href ? new URL(href, document.baseURI).href : null,
+            title: (titleEl && titleEl.getAttribute('title')) || text(titleEl) || (img ? img.getAttribute('alt') : null),
+            price: price ? price.getAttribute('data-meta-price') : null,
+            old_price_text: text(tile.querySelector('[data-meta-name="Snippet__old-price"] > div')),
+            rating: text(tile.querySelector('[data-meta-name="MetaInfo_rating"]')),
+            reviews: text(tile.querySelector('[data-meta-name="MetaInfo_opinionsCount"]')),
+            buyable: !!tile.querySelector('[data-meta-name="Snippet__cart-button"]'),
+            awaited: !!tile.querySelector('[data-meta-name="Snippet__arrival-button"]'),
         });
-        if (out.length >= 48) break;
     }
-    return JSON.stringify({items: out, title: document.title || ''});
-}
-"""
-
-_CARD_EXTRACT_TEMPLATE = """
-() => {
-    //__SHARED_HELPERS__
-    // h1 first: the generic [class*="title"] fallback can pick a section heading.
-    const titleEl = document.querySelector('h1')
-        || document.querySelector('[class*="product-card-top__title"]');
-    const title = cleanText(titleEl) || document.title || null;
-
-    // Scope the price hunt to the product's own buy block. Scanning the whole
-    // body sweeps in recommendation snippets, instalment offers and bonus
-    // amounts. On a live card the buy block is data-meta-name="PriceBlock";
-    // without scoping, querySelector finds a RECOMMENDATION's Snippet__old-price
-    // first and publishes another product's strikethrough as this product's old
-    // price (verified against the 2026-08-06 capture: read 97 990, correct
-    // 105 990). A card with NO buy block at all — out of stock — renders no
-    // product price, while its recommendations still carry Snippet__price and
-    // data-meta-price; without an anchor there is nothing to read, so report no
-    // price rather than a neighbour's (verified: such a page read 60 630 from
-    // a recommendation).
-    const buyBlock = document.querySelector('[data-meta-name="ProductHeader"], [data-meta-name="PriceBlock"], [class*="product-price"], [class*="price-block"], [itemprop="offers"]');
-    const metaPriceEl = buyBlock ? buyBlock.querySelector('[data-meta-price]') : null;
-    const metaPrice = metaPriceEl ? metaPriceEl.getAttribute('data-meta-price') : null;
-    const priceEl = buyBlock
-        ? buyBlock.querySelector('[data-meta-name="PriceBlock__price"], [data-meta-name="Snippet__price"], [data-meta-name="ProductPrice__price"]')
-        : null;
-    const oldPriceEl = buyBlock
-        ? buyBlock.querySelector('[data-meta-name="PriceBlock__additional-price"], [data-meta-name="Snippet__old-price"], [data-meta-name="ProductPrice__old-price"]')
-        : null;
-    const priceTexts = priceTextsIn(buyBlock);
-
-    const bodyText = (document.body ? (document.body.textContent || '') : '');
-    let available = null;
-    if (/Нет в наличии|Под заказ|Закончился/i.test(bodyText)) available = false;
-    else if (/В наличии|В корзину|Купить/i.test(bodyText)) available = true;
-
     return JSON.stringify({
-        title: title,
-        price_meta: metaPrice,
-        price_text: cleanText(priceEl),
-        old_price_text: cleanText(oldPriceEl),
-        price_texts: priceTexts,
-        is_available: available,
-        page_title: document.title || ''
+        title: document.title || '',
+        city: text(document.querySelector('[data-meta-name="CityChangeButton"]')),
+        nothing: !list && /ничего не найдено/i.test(h1 || ''),
+        items: items,
     });
 }
 """
 
-# The shared helpers are spliced in rather than duplicated per connector, so a
-# fix to tile resolution or price selection lands everywhere at once.
-_SEARCH_EXTRACT_JS = _SEARCH_EXTRACT_TEMPLATE.replace("//__SHARED_HELPERS__", JS_HELPERS)
-_CARD_EXTRACT_JS = _CARD_EXTRACT_TEMPLATE.replace("//__SHARED_HELPERS__", JS_HELPERS)
+# Only the listed product fields leave the page: __NEXT_DATA__ also carries cookies,
+# the visitor's address and session tokens.
+_CARD_EXTRACT_JS = """
+() => {
+    let state = null;
+    try {
+        const node = document.getElementById('__NEXT_DATA__');
+        state = node ? JSON.parse(node.textContent) : null;
+    } catch (e) {}
+    const s = (state && state.props && state.props.initialState) || {};
+    const pick = (obj, path) => path.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
+    const pb = pick(s, ['productPage', 'productHeader', 'payload', 'productBase']);
+    return JSON.stringify({
+        title: document.title || '',
+        not_found: pick(s, ['system', 'appState', 'isNotFound']) === true,
+        city: pick(s, ['layoutMain', 'cityList', 'payload', 'city', 'name']) || null,
+        product: pb ? {
+            id: pb.id, name: pb.name, isAvailable: pb.isAvailable, price: pb.price,
+            brand: pb.brand, rating: pb.rating, counters: pb.counters,
+        } : null,
+    });
+}
+"""
 
 
-def _search_item_from_tile(tile: dict[str, Any]) -> CitilinkSearchItemOut:
-    """Map one extracted tile onto the wire shape, parsing prices in Python.
-
-    Tolerates the numeric ``price_rub`` an older build cached as well as the
-    ``price_texts`` candidate list the current extractor returns; the wire shape
-    is identical either way, and ``price_rub`` stays float-or-None, never 0.
-    """
-    price, old_price = prices_from_tile(tile)
-    return CitilinkSearchItemOut(
-        product_id=tile.get("product_id"),
-        title=title_from_tile(tile),
-        price_rub=price,
-        old_price_rub=old_price,
-        url=tile.get("url"),
-    )
-
-
-async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | None) -> dict[str, Any]:
-    """Open ``url`` in the operator's Chrome, let Qrator pass, extract.
-
-    The first navigation pays the proof-of-work (wait_ms is generous for that
-    reason); later reads on the same session are fast. Serialized via _cdp_lock.
-    """
-    async with _cdp_lock:
-        await _polite_wait()
-        async with open_page(url, wait_ms=wait_ms) as page:
-            raw = await asyncio.wait_for(page.evaluate(extract_js), timeout=30.0)
+def _parse_extract(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
-        raise ToolError(TransportDownError("extracted page data missing or over the body cap"))
+        raise_tool_error(TransportDownError("extracted page data missing or over the body cap", provider="citilink"))
     data = json.loads(raw)
     if not isinstance(data, dict):
-        raise ToolError(ParserDriftError("page extractor returned a non-object payload"))
+        raise_tool_error(ParserDriftError("page extractor returned a non-object payload", provider="citilink"))
     return data
 
 
-def _is_qrator_wall(data: dict[str, Any]) -> bool:
-    title = str(data.get("title") or data.get("page_title") or "")
-    return "доступ ограничен" in title.lower() or "qrator" in title.lower() or not title.strip()
+def _ready(data: dict[str, Any]) -> bool:
+    return bool(data.get("items") or data.get("nothing") or data.get("product") or data.get("not_found"))
+
+
+def _is_wall(data: dict[str, Any]) -> bool:
+    """Every Citilink page title names the shop; the «Загрузка...» and block pages do not."""
+    return not _ready(data) and "ситилинк" not in str(data.get("title") or "").lower()
+
+
+def _blocked(status: int) -> TransportDownError:
+    return TransportDownError(
+        f"Citilink refused the browser tab (HTTP {status}); Citilink is stopped for 30 min, do not retry. "
+        "If the profile window shows a check, it may be passed by hand, then `marketplace-mcp resume citilink`.",
+        provider="citilink",
+        status_code=status,
+    )
+
+
+async def _cdp_render(url: str, extract_js: str) -> dict[str, Any]:
+    """Open ``url`` in the plugin's Chrome, let the 429 page reload itself, extract once the data shows."""
+    async with _cdp_lock:
+        try:
+            await _pacer.wait(min_gap=_min_gap)
+        except SourceStoppedError as exc:
+            raise_tool_error(exc)
+        try:
+            async with open_page(
+                url,
+                wait_ms=0,
+                challenge_grace_s=_CHALLENGE_GRACE_S,
+                challenge_statuses=_CHALLENGE_STATUSES,
+            ) as page:
+                deadline = asyncio.get_running_loop().time() + _RENDER_WAIT_MS / 1000
+                while True:
+                    data = _parse_extract(await asyncio.wait_for(page.evaluate(extract_js), timeout=30.0))
+                    if _ready(data) or asyncio.get_running_loop().time() >= deadline:
+                        break
+                    await asyncio.sleep(0.5)
+        except NavBlocked as exc:
+            if exc.status in _REFUSAL_STATUSES:
+                _pacer.record_refusal(f"http {exc.status}")
+                raise_tool_error(_blocked(exc.status))
+            raise_tool_error(
+                TransportDownError(
+                    f"Citilink page failed (HTTP {exc.status})", provider="citilink", status_code=exc.status
+                )
+            )
+    if _is_wall(data):
+        _pacer.record_refusal("loading or block page")
+        raise_tool_error(_blocked(429))
+    _pacer.record_success()
+    return data
+
+
+def _number(text: Any) -> float | None:
+    digits = re.sub(r"[^\d.,]", "", str(text or "")).replace(",", ".")
+    try:
+        return float(digits) if digits else None
+    except ValueError:
+        return None
+
+
+def _clean(value: Any) -> str | None:
+    return " ".join(str(value).split()) or None if isinstance(value, str) else None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _positive_price(value: Any) -> float | None:
+    price = _number(value)
+    return price if price is not None and price > 0 else None
+
+
+def _search_item(tile: dict[str, Any]) -> CitilinkSearchItemOut:
+    price = _positive_price(tile.get("price"))
+    old = _positive_price(tile.get("old_price_text"))
+    reviews = _number(tile.get("reviews"))
+    review_count = int(reviews) if reviews is not None else None
+    in_stock = True if tile.get("buyable") else (False if tile.get("awaited") else None)
+    url = tile.get("url") if isinstance(tile.get("url"), str) else None
+    return CitilinkSearchItemOut(
+        product_id=_extract_product_id(url) if url else None,
+        title=_clean(tile.get("title")),
+        price_rub=price,
+        old_price_rub=old if old is not None and price is not None and old > price else None,
+        rating=R.coerce_rating(_number(tile.get("rating"))) if review_count else None,
+        review_count=review_count,
+        in_stock=in_stock,
+        url=url,
+    )
 
 
 @mcp.tool(
@@ -318,52 +289,58 @@ def _is_qrator_wall(data: dict[str, Any]) -> bool:
     ),
 )
 async def citilink_search(
-    query: Annotated[str, Field(min_length=1, max_length=200, description="Search text, e.g. 'ноутбук lenovo'")],
+    query: Annotated[str, Field(min_length=1, max_length=200, description="Search text, e.g. 'rtx 5070'")],
+    limit: Annotated[int, Field(default=20, ge=1, le=48, description="Items to return from the first page.")] = 20,
     ctx: Context | None = None,
 ) -> CitilinkSearchResponse:
-    """Search Citilink, rendered in the operator's Chrome.
+    """Search Citilink the way the site does, first page by relevance.
 
     ## Return Format
 
-    CitilinkSearchResponse: {status, query, tier_used, count, items[], meta}.
-    price_rub is None when absent — never 0.
+    CitilinkSearchResponse: {status, query, tier_used, city, count, items[], meta}.
+    Items carry product_id, title, price_rub (None when absent — never 0; the club
+    price is not used), old_price_rub, rating, review_count, in_stock, url.
 
     ## Error Format
 
-    ToolError: TransportDownError on CDP/Qrator failures; ParserDriftError when
-    a rendered page yields zero product tiles.
+    ToolError: transport_down when Citilink refused the tab (Citilink stops for 30 min);
+    parser_drift when a rendered page has neither results nor «ничего не найдено».
     """
-    log_event("citilink_search.start", query=query[:60])
+    text = " ".join(query.split())
+    if not text:
+        raise_tool_error(BadRequestError("empty search query"))
+    log_event("citilink_search.start", query=text[:60])
     try:
-        url = f"{SEARCH_URL}?q={urllib.parse.quote(query.strip())}"
+        url = f"{SEARCH_URL}?text={urllib.parse.quote(text)}"
         cached = _cache.get(url)
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=8000, ctx=ctx)
-            except NavBlocked as exc:
-                raise_tool_error(
-                    TransportDownError(
-                        f"Citilink navigation blocked (HTTP {exc.status}). The Qrator challenge must pass in the scraping-profile Chrome — open citilink.ru there once, then retry."
-                    )
-                )
+            payload = await _cdp_render(url, _SEARCH_EXTRACT_JS)
             tier = "cdp"
-            _cache.set(url, payload)
-        items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
-        if not items_raw:
+        tiles = [t for t in payload.get("items") or [] if isinstance(t, dict)]
+        if not tiles and not payload.get("nothing"):
             raise_tool_error(
                 ParserDriftError(
-                    "rendered search page yielded zero product tiles — either the query matched nothing or the DOM shape moved; verify manually"
+                    "rendered search page has neither result tiles nor «ничего не найдено»", provider="citilink"
                 )
             )
-        items = [_search_item_from_tile(it) for it in items_raw if isinstance(it, dict)]
+        if tier == "cdp":
+            _cache.set(url, payload)
+        items = [_search_item(t) for t in tiles[:limit]]
         warnings: list[str] = []
-        if all(it.price_rub is None for it in items):
+        if not items:
+            warnings.append(f"empty: Citilink found nothing for {text!r}")
+        elif all(it.price_rub is None for it in items):
             warnings.append("no_prices_on_page")
-        result = CitilinkSearchResponse(query=query, tier_used=tier, count=len(items), items=items)
+        else:
+            warnings.extend(f"{it.product_id}: no_price" for it in items if it.in_stock and it.price_rub is None)
+        result = CitilinkSearchResponse(
+            query=text, tier_used=tier, city=R.flatten_text(payload.get("city")), count=len(items), items=items
+        )
         attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), warnings, source="citilink_search")
         result.meta = MetaOut(**attached["_meta"])
+        log_event("citilink_search.done", query=text[:60], returned=len(items))
         return result
     except ToolError:
         raise
@@ -371,7 +348,7 @@ async def citilink_search(
         raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"citilink_search failed: {exc}")))
+        raise_tool_error(TransportDownError(_redact(f"citilink_search failed: {exc}"), provider="citilink"))
 
 
 @mcp.tool(
@@ -386,7 +363,7 @@ async def citilink_card(
         Field(
             min_length=1,
             max_length=400,
-            description="citilink.ru product URL containing /product/<slug>/, e.g. /product/noutbuk-lenovo-2169270/",
+            description="citilink.ru product URL or its slug, e.g. /product/noutbuk-lenovo-2169270/",
         ),
     ],
     ctx: Context | None = None,
@@ -395,14 +372,14 @@ async def citilink_card(
 
     ## Return Format
 
-    CitilinkCardResponse: {status, product_id, title, price_rub, old_price_rub,
-    is_available, url, tier_used, meta}.
+    CitilinkCardResponse: {status, product_id, title, brand, price_rub, old_price_rub,
+    is_available, rating, review_count, city, url, tier_used, meta}.
 
     ## Error Format
 
-    ToolError: BadRequestError when the URL carries no product id;
-    TransportDownError on CDP/Qrator failures; ParserDriftError when a rendered
-    card has neither title nor price.
+    ToolError: bad_request when the input carries no citilink.ru product id; not_found
+    for an unknown product; transport_down when Citilink refused the tab (stops for
+    30 min); parser_drift when the page has no product data.
     """
     log_event("citilink_card.start", input=product_url[:80])
     try:
@@ -410,52 +387,55 @@ async def citilink_card(
         if product_id is None:
             raise_tool_error(
                 BadRequestError(
-                    f"could not extract a product id from {product_url!r}; pass a citilink.ru URL with /product/<slug>/ "
-                    f"(the slug ends in a numeric id, e.g. /product/noutbuk-lenovo-2169270/)"
+                    f"could not extract a product id from {product_url!r}; pass a citilink.ru URL with "
+                    "/product/<slug>/ (the slug ends in a numeric id, e.g. /product/noutbuk-lenovo-2169270/)"
                 )
             )
-        # Rebuild from SITE_BASE rather than navigating what the caller passed:
-        # this page opens in the operator's own logged-in Chrome, so the target
-        # host must come from us, never from the argument.
         url = f"{SITE_BASE}/product/{product_id}/"
         cached = _cache.get(url)
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_render(url, _CARD_EXTRACT_JS, wait_ms=8000, ctx=ctx)
-            except NavBlocked as exc:
-                raise_tool_error(TransportDownError(f"Citilink navigation blocked (HTTP {exc.status})."))
+            payload = await _cdp_render(url, _CARD_EXTRACT_JS)
             tier = "cdp"
-            _cache.set(url, payload)
-        title = title_from_tile(payload)
-        price, old_price = prices_from_tile(payload)
-        if title is None and price is None:
+        product = payload.get("product")
+        if not isinstance(product, dict):
+            if payload.get("not_found"):
+                raise_tool_error(NotFoundError(f"Citilink has no product {product_id!r}", provider="citilink"))
+            raise_tool_error(ParserDriftError("card page has no product in __NEXT_DATA__", provider="citilink"))
+        wanted = _TRAILING_NUMBER_RE.search(product_id)
+        if wanted and str(product.get("id")) != wanted.group(1):
             raise_tool_error(
-                ParserDriftError("rendered card has neither title nor price — the card shape moved; verify manually")
+                NotFoundError(
+                    f"Citilink opened product {product.get('id')!r} instead of {wanted.group(1)!r}", provider="citilink"
+                )
             )
-        # Canary for the silent-None hole: if the card says it is in stock but no
-        # price block matched any buy-block anchor, the layout most likely moved.
-        # Without this, the tool would hand back price_rub=None with no signal.
-        # (An unavailable card legitimately has no price block, so no warning there.)
-        card_warnings: list[str] = []
-        if payload.get("is_available") and price is None:
-            card_warnings.append(
-                "in_stock_no_price: card is available but no price block matched — "
-                "the buy-block layout may have moved; verify manually"
-            )
+        if tier == "cdp":
+            _cache.set(url, payload)
+        price_block = _mapping(product.get("price"))
+        price = _positive_price(price_block.get("current"))
+        old = _positive_price(price_block.get("old"))
+        counters = _mapping(product.get("counters"))
+        reviews = R.coerce_int(counters.get("opinions"))
+        brand = _mapping(product.get("brand"))
+        available = product.get("isAvailable")
+        warnings: list[str] = []
+        if available is True and price is None:
+            warnings.append("in_stock_no_price: the card is available but carries no price")
         result = CitilinkCardResponse(
             product_id=product_id,
-            title=title,
+            title=_clean(product.get("name")),
+            brand=R.flatten_text(brand.get("name")),
             price_rub=price,
-            old_price_rub=old_price,
-            is_available=payload.get("is_available"),
+            old_price_rub=old if old is not None and price is not None and old > price else None,
+            is_available=available if isinstance(available, bool) else None,
+            rating=R.coerce_rating(product.get("rating")) if reviews else None,
+            review_count=reviews,
+            city=R.flatten_text(payload.get("city")),
             url=url,
             tier_used=tier,
         )
-        attached = R.attach_meta(
-            result.model_dump(by_alias=True, exclude={"meta"}), card_warnings, source="citilink_card"
-        )
+        attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), warnings, source="citilink_card")
         result.meta = MetaOut(**attached["_meta"])
         return result
     except ToolError:
@@ -464,29 +444,15 @@ async def citilink_card(
         raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"citilink_card failed: {exc}")))
+        raise_tool_error(TransportDownError(_redact(f"citilink_card failed: {exc}"), provider="citilink"))
 
 
-# CLI-only drift canary: ``marketplace-mcp doctor`` imports and calls citilink_selfcheck()
-# directly. It is deliberately NOT registered as an MCP tool — selfchecks are
-# operator diagnostics, and their input/output schemas would be billed in every
-# client request.
+# CLI-only drift canary for ``marketplace-mcp doctor``; not an MCP tool.
 async def citilink_selfcheck(ctx: Context | None = None) -> CitilinkSelfcheckResponse:
-    """Structural drift canary for Citilink (tri-state). Renders one live search
-    page in the operator's Chrome and checks tiles extract.
+    """Drift canary: one search, then the card of its first priced row (two paced tabs).
 
-    Qrator-blocked or CDP-down is ``inconclusive`` (transport), NEVER drift.
-    Only a rendered page that yields zero tiles is ``drift``.
-
-    ## Return Format
-
-    CitilinkSelfcheckResponse: {status, healthy, connector, checks, ...}.
-
-    ## Error Format
-
-    Raises ToolError (TransportDownError) ONLY on an unexpected internal bug
-    that prevents the canary from producing any verdict. Transport/block
-    failures of individual sub-checks map to inconclusive entries, not errors.
+    A refusal or a dead Chrome is inconclusive; only a reached page that fails to
+    parse is drift.
     """
     log_event("citilink_selfcheck.start")
     try:
@@ -499,63 +465,56 @@ async def citilink_selfcheck(ctx: Context | None = None) -> CitilinkSelfcheckRes
         raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"citilink_selfcheck failed: {exc}")))
+        raise_tool_error(TransportDownError(_redact(f"citilink_selfcheck failed: {exc}"), provider="citilink"))
+
+
+def _probe_verdict(exc: ToolError) -> tuple[str, str]:
+    try:
+        code = json.loads(str(exc)).get("error")
+    except (ValueError, AttributeError):
+        code = None
+    return ("drift", "parse_smoke_failed") if code == "parser_drift" else ("inconclusive", "transport_down")
 
 
 async def _citilink_selfcheck_impl(ctx: Context | None) -> CitilinkSelfcheckResponse:
     checks: dict[str, dict] = {}
-    baseline = "cdp-search-shape-v1"
-    url = f"{SEARCH_URL}?q={urllib.parse.quote('ноутбук')}"
+    first_url: str | None = None
     try:
         async with asyncio.timeout(90):
-            payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=8000, ctx=ctx)
-    except TimeoutError:
-        checks["search"] = R.selfcheck_entry(
-            "inconclusive", baseline=baseline, reason="timeout", notes=["render exceeded 90s"]
-        )
-    except Exception as exc:
-        checks["search"] = R.selfcheck_entry(
-            "inconclusive",
-            baseline=baseline,
-            reason="transport_down",
-            notes=[f"{type(exc).__name__}: {str(exc)[:120]}"],
-        )
-    else:
-        items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
-        if items_raw:
-            # Tiles extract — now ask the second question: did the SHAPE move?
-            # The registry was measured on a captured page; a live payload that
-            # loses a parser-critical path is structural drift even while tiles
-            # still come back. Types may vary with the data (str/null), so the
-            # required check is on key presence, not on the full signature.
-            live_signature = R.shape_signature(payload)
-            drift = R.diff_keys(SEARCH_SHAPE_REFERENCE, live_signature)
-            missing_required = [
-                key for key in SEARCH_REQUIRED_KEYS if not any(entry.startswith(f"{key}:") for entry in live_signature)
-            ]
-            if missing_required:
-                checks["search"] = R.selfcheck_entry(
-                    "drift",
-                    baseline=baseline,
-                    reason="shape_drift",
-                    notes=[
-                        f"{len(items_raw)} tiles extracted",
-                        f"required paths missing: {', '.join(missing_required)}",
-                    ],
-                    shape_missing=drift["missing"],
-                    shape_added=drift["added"],
-                )
-            else:
-                notes = [f"{len(items_raw)} tiles extracted", "shape matches the captured reference"]
-                if drift["added"]:
-                    notes.append(f"{len(drift['added'])} new paths vs baseline (informational)")
-                checks["search"] = R.selfcheck_entry(
-                    "healthy", baseline=baseline, notes=notes, shape_added=drift["added"]
-                )
+            found = await citilink_search(_settings.selfcheck_query, limit=5, ctx=ctx)
+        priced = [it for it in found.items if it.price_rub is not None and it.url]
+        if priced:
+            first_url = priced[0].url
+            checks["search"] = R.selfcheck_entry(
+                "healthy", baseline="dom-search-v2", notes=[f"{len(priced)} priced rows"]
+            )
         else:
             checks["search"] = R.selfcheck_entry(
-                "drift", baseline=baseline, reason="parse_smoke_failed", notes=["zero tiles"]
+                "drift", baseline="dom-search-v2", reason="parse_smoke_failed", notes=["no priced rows"]
             )
+    except TimeoutError:
+        checks["search"] = R.selfcheck_entry("inconclusive", baseline="dom-search-v2", reason="timeout")
+    except ToolError as exc:
+        state, reason = _probe_verdict(exc)
+        checks["search"] = R.selfcheck_entry(state, baseline="dom-search-v2", reason=reason, notes=[str(exc)[:160]])
+
+    if first_url is None:
+        checks["card"] = R.selfcheck_entry(
+            "inconclusive", baseline="next-card-v1", reason="skipped", notes=["no search row to open"]
+        )
+    else:
+        try:
+            async with asyncio.timeout(90):
+                card = await citilink_card(first_url, ctx=ctx)
+            state = "healthy" if card.price_rub is not None else "drift"
+            checks["card"] = R.selfcheck_entry(
+                state, baseline="next-card-v1", reason=None if state == "healthy" else "parse_smoke_failed"
+            )
+        except TimeoutError:
+            checks["card"] = R.selfcheck_entry("inconclusive", baseline="next-card-v1", reason="timeout")
+        except ToolError as exc:
+            state, reason = _probe_verdict(exc)
+            checks["card"] = R.selfcheck_entry(state, baseline="next-card-v1", reason=reason, notes=[str(exc)[:160]])
 
     result_dict = R.selfcheck_result(
         "citilink",
@@ -568,7 +527,4 @@ async def _citilink_selfcheck_impl(ctx: Context | None) -> CitilinkSelfcheckResp
     return CitilinkSelfcheckResponse(**result_dict)
 
 
-# Advertised output schemas are the dominant constant cost of an MCP mount:
-# replace the full Pydantic tree with top-level field names (~64 % fewer
-# wire tokens on the unified server).
 apply_compact_output_schemas(mcp)

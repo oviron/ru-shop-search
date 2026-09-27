@@ -44,7 +44,7 @@ import time
 from collections.abc import AsyncIterator, Collection
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
@@ -483,9 +483,19 @@ class NavBlocked(RuntimeError):
 _NAV_STATUS_JS = "() => performance.getEntriesByType('navigation')[0]?.responseStatus ?? 0"
 
 
-async def _challenge_cleared(page: PageLike, status: int | None, grace_s: float) -> bool:
+_GRACE_STATUSES = frozenset({401, 403})
+
+
+class _Grace(NamedTuple):
+    seconds: float = 0.0
+    statuses: frozenset[int] = _GRACE_STATUSES
+
+
+async def _challenge_cleared(
+    page: PageLike, status: int | None, grace_s: float, statuses: frozenset[int] = _GRACE_STATUSES
+) -> bool:
     """Ждёт, пока страница антибота (403 у Ozon, 401 у Qrator) сама перезагрузится в 200; мы ничего не шлём."""
-    if status not in (401, 403) or grace_s <= 0:
+    if status not in statuses or grace_s <= 0:
         return False
     deadline = time.monotonic() + grace_s
     while time.monotonic() < deadline:
@@ -695,7 +705,7 @@ class _RawCdpPage:
 
 
 @asynccontextmanager
-async def _raw_cdp_page(url: str, wait_ms: int, challenge_grace_s: float = 0.0) -> AsyncIterator[_RawCdpPage]:
+async def _raw_cdp_page(url: str, wait_ms: int, grace: _Grace = _Grace()) -> AsyncIterator[_RawCdpPage]:
     """Open a tab over raw CDP, mirroring open_page's guarantees."""
     if _websockets is None:
         raise RuntimeError("the raw-CDP fallback needs the 'websockets' package (cdp extra)")
@@ -746,7 +756,9 @@ async def _raw_cdp_page(url: str, wait_ms: int, challenge_grace_s: float = 0.0) 
                 await page._send("Network.enable", timeout=_RAW_CONNECT_TIMEOUT_S)
                 await page._send("Runtime.enable", timeout=_RAW_CONNECT_TIMEOUT_S)
                 status = await page.goto_and_status(url)
-                if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(page, status, challenge_grace_s):
+                if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(
+                    page, status, grace.seconds, grace.statuses
+                ):
                     raise NavBlocked(status, page.url)
                 if wait_ms > 0:
                     await asyncio.sleep(wait_ms / 1000)
@@ -829,13 +841,15 @@ async def _new_tab(ctx: BrowserContext) -> Page:
 
 
 @asynccontextmanager
-async def _playwright_page(url: str, wait_ms: int = 5000, challenge_grace_s: float = 0.0) -> AsyncIterator[Page]:
+async def _playwright_page(url: str, wait_ms: int = 5000, grace: _Grace = _Grace()) -> AsyncIterator[Page]:
     async with get_context() as ctx:
         page = await asyncio.wait_for(_new_tab(ctx), timeout=_TAB_OP_TIMEOUT_S)
         try:
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
             status = resp.status if resp is not None else None
-            if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(page, status, challenge_grace_s):
+            if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(
+                page, status, grace.seconds, grace.statuses
+            ):
                 final = ""
                 try:
                     final = page.url
@@ -882,6 +896,7 @@ async def open_page(
     *,
     allowed_hosts: Collection[str] | None = None,
     challenge_grace_s: float = 0.0,
+    challenge_statuses: Collection[int] = _GRACE_STATUSES,
 ) -> AsyncIterator[PageLike]:
     """Open a tab on ``url`` in the operator's Chrome, yield it, then close it.
 
@@ -889,7 +904,8 @@ async def open_page(
       * non-http(s) schemes are refused outright (scheme guard);
       * a block/auth/5xx main document raises ``NavBlocked`` rather than
         yielding a page that only looks like content; with ``challenge_grace_s``
-        a 401/403 antibot page that reloads itself into a 200 within that time passes;
+        an antibot page with a status in ``challenge_statuses`` (401/403 by default)
+        that reloads itself into a 200 within that time passes;
       * tab creation, navigation and teardown are individually bounded, so a
         wedged CDP session cannot hang a tool call indefinitely;
       * when Playwright cannot finish its attach handshake (Chrome >= 151),
@@ -920,15 +936,16 @@ async def open_page(
     initial_host = urlsplit(url).hostname
     host_policy = frozenset(allowed_hosts or ({initial_host} if initial_host else set()))
 
+    grace = _Grace(challenge_grace_s, frozenset(challenge_statuses))
     budget = navigation_budget()
     permit = await budget.acquire(initial_host or "")
     stack = AsyncExitStack()
     page: PageLike
     try:
         try:
-            page = await stack.enter_async_context(_playwright_page(url, wait_ms, challenge_grace_s))
+            page = await stack.enter_async_context(_playwright_page(url, wait_ms, grace))
         except _CdpConnectTimeout:
-            page = await stack.enter_async_context(_raw_cdp_page(url, wait_ms, challenge_grace_s))
+            page = await stack.enter_async_context(_raw_cdp_page(url, wait_ms, grace))
         _check_final_host(page.url, host_policy)
         permit.ok()
     except NavBlocked as exc:

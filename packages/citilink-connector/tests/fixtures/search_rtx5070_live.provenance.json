@@ -1,0 +1,9 @@
+{
+  "url": "https://www.citilink.ru/search/?text=rtx%205070",
+  "captured_at": "2026-09-27",
+  "sha256": "1194fdcc3ab1c8d97ebcc4558aba17305ae750db1c652a6e3c8d9e0106719899",
+  "method": "captured live on 2026-09-27 20:04:11 in the plugin's anonymous Chrome tab (200 at once: the 20:01:50 visit had passed the self-reloading 429 «Загрузка...» in 1.5 s); rendered DOM trimmed with jsdom to the city button, h1 and ProductListLayout with tiles 1, 2, 6 and 30 of 30; scripts (incl. __NEXT_DATA__ with cookies and the visitor address), styles, classes, svg and image sources removed; the city the site picked from the IP redacted to «Город по IP», its phone removed",
+  "ground_truth": {
+    "note": "30 tiles, 29 buyable, 1 «Нет в наличии»; kept: Gigabyte RTX 5070 GAMING OC 96 690 ₽ (4.8, 13 отзывов), Palit RTX 5070 Infinity 3 94 560 ₽ (4.9, 18), ASUS TUF RTX 5070 105 500 ₽ was 114 000 (-7%, 4.7, 7), ASUS PRIME RTX 5070 Ti no price, «Узнать о поступлении» (5, 2)"
+  }
+}

@@ -29,7 +29,7 @@ inside a real browser.
 | Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
 | Lamoda | ❌ ServicePipe; с домашнего ✅ | ServicePipe: отказ по адресу | ✅ `curl_cffi` |
 | DNS | ❌ 401 | Qrator JS proof-of-work | ✅ via your Chrome |
-| Citilink | ❌ 429 | Qrator rate block | ✅ via your Chrome |
+| Citilink | ❌ 429 | Qrator: JS-проверка на 429, вкладка проходит сама | ✅ вкладка профиля |
 | AliExpress | ❌ x5sec challenge | x5sec; search works in a real Chrome | ✅ via your Chrome |
 
 A second live run in July 2026 confirmed all four CDP sources on the maintainer's
@@ -75,9 +75,8 @@ Chrome, то есть ровно из того окружения, ради ко
 **Ситилинк в этой выдаче рисует плитки внутри iframe.** В верхнем документе
 товарных ссылок нет вообще, все 27 лежат во вложенном фрейме того же
 происхождения. Экстрактор, который читает только `document`, на такой раскладке
-видит ноль плиток и сообщает дрейф, хотя парсер исправен. Отсюда и плавающий
-результат: раскладка приходит не всем и не всегда. Экстракторы Ситилинка и DNS
-теперь собирают ссылки и из фреймов, которые им разрешено читать.
+видит ноль плиток и сообщает дрейф, хотя парсер исправен. В сентябре 2026 плитки
+пришли в самом документе, но поиск Ситилинка по-прежнему читает и такие фреймы.
 
 **Lamoda** отвечает «Запрос отклонен» и на поиск, и на главную. Это блок по
 адресу, а не смена вёрстки: страница вообще не отдаётся. Совпадает с выводом из
@@ -359,36 +358,34 @@ Puppeteer — the same thing this connector does. Pace the calls and run
 `dns_selfcheck` from your Chrome; from a datacenter address the site answers 401
 and there is nothing to verify.
 
-### Citilink — Qrator plus gRPC-web
+### Ситилинк — вкладка профиля, Qrator пропускает сам
 
-The entire domain returns **HTTP 429**, including `robots.txt` — stricter than DNS.
-Subdomains too (`rpc.citilink.ru`, `api.citilink.ru`).
+Проверено 2026-09-27 с домашнего адреса, анонимный профиль плагина, без логина.
 
-Its data transport is not REST or GraphQL but **gRPC-web**:
-
-```
-POST https://rpc.citilink.ru/catalog-site/<Service>/<Method>
-metadata: x-citilink-anon-id: <hex>
-```
-
-Using it would require reversing the protobuf schema and method names. The public
-`github.com/citilinkru` repos are internal infrastructure tooling, not a catalog
-client; every working third-party parser drives a real browser.
-
-Anonymously reachable: `sitemap/main/sitemap.xml` (product URL inventory only).
-
-**Verdict:** shipped in v1.2.0 via the CDP tier, with gRPC-web deliberately not
-reversed. A real Chrome passes Qrator and renders the pages, so the
-`citilink-connector` reads the DOM instead of the binary protocol — the
-maintainable route.
-
-The July 2026 run had Citilink stable and healthy once the product-id regex was
-fixed. The old pattern demanded 24 hex; the real route is a slug ending in digits
-(`/product/noutbuk-lenovo-2169270/`), so search had been parsing zero tiles and
-reporting drift. With that corrected it held steady across the run. This is the
-right route for the same reason as DNS: every working third-party Citilink parser
-drives a real browser, and the `github.com/citilinkru` repos are internal
-infrastructure tooling, not a catalog client.
+- **HTTP без браузера** получает 429 со страницей «Загрузка...»: это JS-проверка Qrator,
+  которая ставит куку `_pcl`. `SZhukovWork/citilink-mcp` решает её на Python и повторяет
+  запрос. Повтор после отказа нарушает наше стоп-правило, поэтому этот путь не взят.
+- **Вкладка** получает тот же 429, и через 1,5 с страница сама перезагружается в 200 с
+  выдачей. Мы в это время ничего не шлём. Поэтому коннектор передаёт в `open_page`
+  `challenge_statuses={401, 403, 429}` и ждёт переход до 12 с; у остальных магазинов 429
+  остаётся стопом сразу.
+- **Поиск** `/search/?text=` читает плитки `ProductVerticalSnippet` и
+  `ProductHorizontalSnippet` только внутри `ProductListLayout`, в самом документе и в
+  iframe того же происхождения. На «ничего не найдено» сайт показывает рекомендации с
+  ценами в другом блоке; без этой границы они читались бы как выдача. Цена из
+  `data-meta-price`, старая цена — только если больше текущей, рейтинг — только при
+  отзывах. Наличие: кнопка корзины — есть, кнопка «Сообщить о поступлении» — нет,
+  иначе неизвестно.
+- **Карточка** `/product/<slug>-<id>/` читает `productBase` из `__NEXT_DATA__`. Из
+  вкладки уходят только поля товара и город; куки, адрес посетителя и токены из того же
+  JSON наружу не попадают. Если число в конце slug не совпало с `id` товара, это другой
+  товар, ответ `not_found`. Клубная цена (`price.club`) в `price_rub` не идёт.
+- **Город** сайт выбирает по IP, ответ несёт его в поле `city`.
+- **Отказ.** 401/403/429, которые не ушли в 200, и страница без выдачи и без слова
+  «Ситилинк» в заголовке останавливают Ситилинк на 30 минут. 5xx — обычный сбой без
+  стопа.
+- **gRPC-web** (`rpc.citilink.ru/catalog-site/<Service>/<Method>`) не реверсится: схема
+  protobuf закрыта, а вкладка даёт те же данные.
 
 ## Traps and refusals worth their own section
 

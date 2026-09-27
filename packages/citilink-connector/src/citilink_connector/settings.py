@@ -19,10 +19,10 @@ class CitilinkSettings(BaseSettings):
         case_sensitive=False,
     )
 
-    timeout: float = Field(default=30.0, gt=0)
     min_gap: float = Field(default=3.0, ge=0)
     cache_ttl: float = Field(default=120.0, ge=0, description="Seconds to cache upstream reads. 0 disables caching.")
     max_body_bytes: int = Field(default=_DEFAULT_MAX_BODY_BYTES, gt=0)
+    selfcheck_query: str = Field(default="rtx 5070", min_length=1, description="Search the selfcheck runs.")
 
 
 @lru_cache(maxsize=1)
