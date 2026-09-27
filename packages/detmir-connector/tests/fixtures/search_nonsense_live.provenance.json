@@ -1,0 +1,9 @@
+{
+  "url": "https://www.detmir.ru/search/results/?qt=zxqvwj%20%D0%BF%D0%BF%D0%BB%D0%BA&searchType=common&searchMode=common",
+  "captured_at": "2026-09-27",
+  "sha256": "c8d155c5f2bc4b1ac2c8d34f80f9b0b9e16d1a84e8291058a120ad0fee91faa2",
+  "method": "captured live on 2026-09-27 19:42 with curl_cffi (impersonate=chrome) from the home IP, no cookies. Kept only window.appData.region.data (country, region, code, iso), catalog.data (meta limit/offset/length/title and three of the 36 items, cut to the same keys as search_lego_technic_live.html) and search.suggestions, which was empty; re-serialised in the same JSON.parse(\"…\") form; the surrounding HTML is a minimal stand-in",
+  "ground_truth": {
+    "note": "a nonsense query: the site still returned 291 goods (shelf rail, book stand, chest of drawers), none mentioning the query words, and no search suggestions"
+  }
+}

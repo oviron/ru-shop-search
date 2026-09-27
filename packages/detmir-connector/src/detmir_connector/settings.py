@@ -82,6 +82,11 @@ class DetmirSettings(BaseSettings):
         min_length=1,
         description="Baseline category alias for the drift canary.",
     )
+    selfcheck_query: str = Field(
+        default="lego technic",
+        min_length=1,
+        description="Baseline search text for the drift canary.",
+    )
 
 
 @lru_cache(maxsize=1)

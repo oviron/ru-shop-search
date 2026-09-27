@@ -237,11 +237,12 @@ print(asyncio.run(mcp.list_tools()))
 **If a capability does not exist upstream, do not ship a tool that pretends it
 does.**
 
-Detsky Mir has no text search. A `detmir_search` tool was written, tested against
-live data, and deleted — for the query "лего" it returned nappies, dishwashing
-liquid and a collagen supplement, each with a correct price and rating. That
-plausibility is what made it dangerous: an error is diagnosable, a confident wrong
-answer is not.
+The API of Detsky Mir ignores text filters. A `detmir_search` built on it returned
+nappies, dishwashing liquid and a collagen supplement for "лего", each with a correct
+price and rating. That plausibility is what made it dangerous: an error is diagnosable,
+a confident wrong answer is not. The tool was deleted, and search came back only when
+the site's own results page proved to answer real queries; even then it needed a guard
+against the site padding an empty result with popular goods.
 
 Document the absence in the tool descriptions so an agent stops looking for a tool
 that should not exist.

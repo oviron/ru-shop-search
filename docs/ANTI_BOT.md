@@ -24,7 +24,7 @@ inside a real browser.
 |---|---|---|---|
 | Wildberries | карточка ✅, поиск ❌ 403 | `wbaas`: поиск только с токеном из браузера | ✅ токен из твоего Chrome |
 | Yandex Market | ✅ поиск и `/card/` | SmartCaptcha: `/product/<id>` сразу даёт капчу | ✅ `curl_cffi` |
-| Detsky Mir | ✅ works | none | ✅ |
+| Detsky Mir | ⚠️ с домашнего ✅, с хостинга 418 | DDoS-Guard: 418 по адресу | ✅ `curl_cffi` |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
 | Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
 | Lamoda | ⚠️ partial | anti-bot redirect loop | ✅ via your Chrome |
@@ -186,34 +186,27 @@ worth knowing:
 - Повторяются только сбои сети, 5xx и 302 без `Location`. 401, 403 и 429 — стоп.
 - Разбор привязан к фронтенду, поэтому `yandex_selfcheck` здесь нужнее, чем у JSON API.
 
-### Detsky Mir — open JSON API, refused by address
+### Detsky Mir — страница поиска и JSON API, отказ по адресу
 
-**Dated correction (2026-09-21).** The "genuinely open" premise below was
-measured from a Russian residential address and no longer holds from every
-vantage point. From a European hosting address (Frankfurt, a hosting ASN),
-`api.detmir.ru` answered **HTTP 418 from DDoS-Guard for the whole domain** — for
-httpx carrying this connector's exact headers, for httpx with no headers at all,
-and for curl_cffi's Chrome impersonation alike. The refusal arrives before any
-parser runs, so `inconclusive` from this address means the address, not the code;
-nothing in the request shaping is at fault and nothing was changed in response.
-The connector now says so in the error and in the canary note. Live record:
-[LIVE_STATUS.md](LIVE_STATUS.md).
+Поиск идёт через страницу сайта `/search/results/?qt=…`, карточка и каталог — через
+`api.detmir.ru`. Всё по HTTP через `shop_request` (`curl_cffi`, `impersonate="chrome"`),
+без кук.
 
-`api.detmir.ru` answers with no User-Agent at all. No rate limit observed across
-rapid sequential requests. Three quirks:
-
-- **HTTP 200 can carry `{"status": 404}`.** Status codes alone cannot be trusted.
-- **Listings are `/v4/` only.** The old `/v2/products?filter=` path is gone.
-- **Sporadic 502s**, retried automatically.
-- **Region only applies via `filter=withregion:`.** The query-parameter spelling
-  `?withregion=RU-SPE` is accepted and silently ignored, which is how `detmir_card`
-  shipped in v1.0.0 reporting `store_count: 0` for every product while labelling
-  the response with a region. The filter form returns real per-city numbers — one
-  product sat in 152 Moscow stores, 37 in St Petersburg, 2 in Khabarovsk. Fixed in
-  v1.1.0, where every tool also takes a per-call `region`.
-
-And one thing that is not a quirk but a genuine absence — see
-[the Detsky Mir search trap](#the-detsky-mir-search-trap).
+- **Отказ — 418 от DDoS-Guard.** 2026-09-21 с хостингового адреса во Франкфурте
+  `api.detmir.ru` отвечал 418 на любой запрос, с любыми заголовками и отпечатком. С
+  домашнего адреса 2026-09-27 и страница поиска, и API отвечали 200. 418, как и
+  401/403/429, останавливает Детмир на 30 минут; страница DDoS-Guard вместо выдачи — тоже.
+- **Страница поиска несёт состояние целиком.** В `window.appData = JSON.parse("…")` лежат
+  36 товаров первой страницы, регион (`RU-MOW` для запроса без кук) и подсказки поиска.
+- **Нечёткий поиск.** Без совпадений сайт не отвечает «ничего не найдено», а отдаёт
+  сотни популярных товаров. См. [ловушку поиска Детмира](#the-detsky-mir-search-trap).
+- **HTTP 200 у API может нести `{"status": 404}`.** Одному коду статуса верить нельзя.
+- **Листинги только `/v4/`.** Старого `/v2/products?filter=` нет.
+- **Регион только через `filter=withregion:`.** Параметр `?withregion=RU-SPE` API
+  принимает и молча игнорирует. Через фильтр число магазинов с товаром честное: 152 в
+  Москве, 37 в Петербурге, 2 в Хабаровске для одного и того же товара.
+- **Промокодная цена не цена.** `priceWithBestVoucher` требует промокод, в `price_rub` она
+  не идёт.
 
 ### Ozon — needs your browser
 
@@ -414,25 +407,19 @@ infrastructure tooling, not a catalog client.
 
 ### The Detsky Mir search trap
 
-Detsky Mir's API accepts text filters and ignores them. Every variant returns the
-entire catalog:
+API Детмира принимает текстовые фильтры и игнорирует их: `q:`, `phrase:`, `search:` и
+`text:` возвращали весь каталог, около 301 тысячи товаров, и первыми на «лего» шли
+трусики. Апстрим построил на этом поиск, получил на «лего» подгузники, средство для посуды
+и коллаген, каждый с верной ценой и рейтингом, и удалил его.
 
-| Filter | Reported total | First result for "лего" |
-|---|---|---|
-| `q:лего` | 301,420 | Трусики MANU |
-| `phrase:лего` | 301,420 | Трусики MANU |
-| `search:лего` | 301,411 | Трусики MANU |
-| `text:лего` | 301,411 | Трусики MANU |
-
-The website's `/catalog/search/?q=` route looks more promising — it returns 12
-product ids — but it answers **HTTP 404** and those ids come from a promo carousel.
-A search tool built on it was implemented, tested live, and produced this for
-"лего": nappies, dishwashing liquid, and a collagen supplement. All with correct
-prices and ratings, which is what makes it dangerous.
-
-That tool was deleted. `detmir_categories` → `detmir_category` is the honest path,
-and the absence is documented in the tool descriptions so an agent does not go
-looking for a search tool that should not exist.
+Поиск плагина читает страницу сайта `/search/results/`, и на настоящие запросы она
+отвечает по делу: «lego technic» дал 424 набора LEGO. Но у неё своя ловушка. 2026-09-27
+бессмысленный «zxqvwj пплк» вернул 291 товар: полки, комоды, подставки для книг. В
+метаданных выдачи отличий нет, тот же `driver: anyQuerySolr`. Отличаются две вещи:
+подсказки сайта (`search.suggestions`) пустые, и ни одно название или бренд на странице не
+содержит слов запроса. Когда совпали обе, `detmir_search` отдаёт пустой список с
+предупреждением `no_match`. Слова сверяются по первым пяти буквам, чтобы «комоды» нашли
+«Комод».
 
 ### The Ozon seller-details refusal (v1.1.0)
 

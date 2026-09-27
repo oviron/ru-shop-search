@@ -22,6 +22,7 @@ def test_card_normalization_matches_shape_golden() -> None:
         "availability:str",
         "available_offline:bool",
         "available_online:bool",
+        "barcodes[]:str",
         "brand:str",
         "discount_percent:int",
         "is_marketplace:bool",

@@ -161,9 +161,7 @@ def _available_sources() -> dict[str, Any]:
 
 SOURCES = _available_sources()
 
-# Marketplaces that support a text query. Detsky Mir is absent on purpose: its
-# API has no working text search (see the detmir connector's module docstring),
-# so including it would mean returning products unrelated to the query.
+# Marketplaces that support a text query.
 SEARCHABLE = (
     "wildberries",
     "yandex_market",
@@ -173,6 +171,7 @@ SEARCHABLE = (
     "dns",
     "citilink",
     "aliexpress",
+    "detsky_mir",
 )
 
 
@@ -671,6 +670,30 @@ async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+async def _search_detmir(query: str, limit: int) -> list[MarketOffer]:
+    """Adapt ``detmir_search`` results (HTTP; the site's own results page)."""
+    server = SOURCES["detsky_mir"]
+    response = await server.detmir_search(query=query, limit=min(limit, 36))
+
+    offers: list[MarketOffer] = []
+    for item in (getattr(response, "items", None) or [])[:limit]:
+        offers.append(
+            MarketOffer(
+                source="detsky_mir",
+                product_id=str(item.product_id or ""),
+                title=item.title or "",
+                brand=item.brand or "",
+                seller="",
+                price_rub=item.price_rub,
+                rating=item.rating,
+                rating_count=item.review_count,
+                in_stock=item.availability == "AVAILABLE" if item.availability else None,
+                url=item.url or "",
+            )
+        )
+    return OfferBatch(offers, response)
+
+
 _SEARCH_IMPLS = {
     "wildberries": _search_wildberries,
     "yandex_market": _search_yandex,
@@ -680,6 +703,7 @@ _SEARCH_IMPLS = {
     "dns": _search_dns,
     "citilink": _search_citilink,
     "aliexpress": _search_aliexpress,
+    "detsky_mir": _search_detmir,
 }
 
 
@@ -1236,8 +1260,8 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
         "deselected": sorted(deselected),
         "notes": {
             "detsky_mir": (
-                "installed for direct card/category lookups but excluded from text comparison — "
-                "its API has no working text search"
+                "search reads the site's results page over HTTP; when nothing matches, the site's "
+                "unrelated filler is dropped with a no_match warning"
             )
             if "detsky_mir" in SOURCES
             else ("deselected by MARKETPLACE_SOURCES" if "detsky_mir" in deselected else "not installed"),

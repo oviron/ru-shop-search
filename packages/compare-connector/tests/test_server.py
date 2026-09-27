@@ -104,13 +104,31 @@ async def test_selected_missing_connector_still_makes_default_comparison_partial
     assert "ozon" not in report["deselected"]
 
 
-async def test_detsky_mir_is_not_a_comparison_source():
-    """Detsky Mir has no working text search, so it must not join a text comparison.
+async def test_detsky_mir_search_rows_become_offers(monkeypatch):
+    from detmir_connector import server as detmir
+    from detmir_connector.models_output import DetmirListResponse, MetaOut
 
-    Including it would return products unrelated to the query — confidently wrong
-    is worse than absent.
-    """
-    assert "detsky_mir" not in server.SEARCHABLE
+    fixture = Path(__file__).parents[2] / "detmir-connector/tests/fixtures/search_lego_technic_live.html"
+    raw = detmir._app_data(fixture.read_text(encoding="utf-8"))["catalog"]["data"]["items"]
+    products = [detmir._parse_product(item) for item in raw]
+
+    async def detmir_search(query, limit):
+        return DetmirListResponse(
+            query=query, mode="search", returned=len(products), items=products, meta=MetaOut(source="detmir_search")
+        )
+
+    monkeypatch.setattr(
+        server, "SOURCES", {"detsky_mir": type("M", (), {"detmir_search": staticmethod(detmir_search)})}
+    )
+
+    offers = await server._search_detmir("lego technic", 2)
+
+    assert "detsky_mir" in server.SEARCHABLE
+    assert [(o.product_id, o.price_rub, o.brand, o.in_stock) for o in offers] == [
+        ("6750060", 7199.0, "LEGO", True),
+        ("6750058", 6083.0, "LEGO", True),
+    ]
+    assert offers[0].url == "https://www.detmir.ru/product/index/id/6750060/"
 
 
 # ----------------------------------------------------------------- ranking ----

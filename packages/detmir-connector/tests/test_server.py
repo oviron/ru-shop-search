@@ -15,6 +15,11 @@ from pathlib import Path
 import pytest
 from detmir_connector import server
 from fastmcp.exceptions import ToolError
+from mcp_core.pacing import Pacer
+from mcp_core.stopgate import SourceStoppedError as StopGateError
+from mcp_core.stopgate import StopGate
+from mcp_core.transport import impersonated
+from mcp_core.transport.impersonated import Reply
 
 # ---------------------------------------------------------------- fixtures ----
 
@@ -134,18 +139,105 @@ def test_server_version_matches_pyproject():
 async def test_registered_tools_are_stable():
     """The tool surface is a public contract — renames break client configs."""
     names = {tool.name for tool in await server.mcp.list_tools()}
-    assert names == {"detmir_card", "detmir_category", "detmir_categories"}
+    assert names == {"detmir_search", "detmir_card", "detmir_category", "detmir_categories"}
 
 
-async def test_no_search_tool_is_exposed():
-    """Detsky Mir has no working text search, so no tool may pretend otherwise.
+# ------------------------------------------------------------------ search ----
 
-    The v4 filter ignores every text key and returns the whole catalog, and the
-    site's search route answers 404 with a promo carousel. A 'search' tool here
-    would return confidently wrong products.
-    """
-    names = {tool.name for tool in await server.mcp.list_tools()}
-    assert not any("search" in name for name in names)
+SEARCH_HTML = (Path(__file__).parent / "fixtures" / "search_lego_technic_live.html").read_text(encoding="utf-8")
+NONSENSE_HTML = (Path(__file__).parent / "fixtures" / "search_nonsense_live.html").read_text(encoding="utf-8")
+
+
+def stub_page(monkeypatch, *replies: tuple[int, str]) -> list[str]:
+    urls: list[str] = []
+    queue = list(replies)
+
+    async def fake_request(url: str, label: str):
+        urls.append(url)
+        status, text = queue.pop(0)
+        return Reply(status, text, None)
+
+    monkeypatch.setattr(server, "_request", fake_request)
+    return urls
+
+
+async def test_search_reads_the_sites_own_results_page(monkeypatch, no_delay):
+    urls = stub_page(monkeypatch, (200, SEARCH_HTML))
+
+    result = await server.detmir_search("lego  technic")
+
+    assert urls == ["https://www.detmir.ru/search/results/?qt=lego%20technic&searchType=common&searchMode=common"]
+    assert (result.mode, result.region, result.total_available, result.returned) == ("search", "RU-MOW", 424, 4)
+    assert [(p.product_id, p.price_rub, p.old_price_rub) for p in result.items] == [
+        (6750060, 7199.0, 9499.0),
+        (6750058, 6083.0, 9499.0),
+        (6024094, 4399.0, 8199.0),
+        (7144669, 159999.0, None),
+    ]
+    assert result.items[0].barcodes == ["5702017816364", "4640243795552"]
+    assert result.items[0].url == "https://www.detmir.ru/product/index/id/6750060/"
+
+
+async def test_search_keeps_the_promo_code_price_out(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, SEARCH_HTML))
+
+    marketplace = (await server.detmir_search("lego technic")).items[3]
+
+    assert marketplace.is_marketplace is True
+    assert marketplace.price_rub == 159999.0, "143 999 needs the promo code РЯБИНА"
+
+
+async def test_search_reads_online_and_store_stock_apart(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, SEARCH_HTML))
+
+    bugatti = (await server.detmir_search("lego technic")).items[2]
+
+    assert (bugatti.availability, bugatti.available_online, bugatti.available_offline) == ("AVAILABLE", False, True)
+
+
+async def test_unrelated_fuzzy_results_are_left_out(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, NONSENSE_HTML))
+
+    result = await server.detmir_search("zxqvwj пплк")
+
+    assert (result.returned, result.total_available, result.items) == (0, 0, [])
+    assert result.meta.warnings[0].startswith("no_match:")
+
+
+async def test_rows_naming_a_query_word_in_another_form_are_kept(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, NONSENSE_HTML))
+
+    result = await server.detmir_search("комоды")
+
+    assert result.returned == 3
+    assert result.meta.warnings == []
+
+
+async def test_site_suggestions_vouch_for_results_in_another_script(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, SEARCH_HTML))
+
+    result = await server.detmir_search("лего техник")
+
+    assert result.returned == 4
+
+
+async def test_a_page_without_app_data_is_drift(monkeypatch, no_delay):
+    stub_page(monkeypatch, (200, "<html><body>новый сайт</body></html>"))
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.detmir_search("lego technic")
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
+
+
+async def test_a_ddos_guard_page_stops_detmir(monkeypatch, no_delay):
+    monkeypatch.setattr(server, "_limiter", Pacer(0.0, source="detsky_mir", gate=StopGate(None)))
+    urls = stub_page(monkeypatch, (200, "<html><title>DDoS-Guard</title></html>"), (200, SEARCH_HTML))
+
+    with pytest.raises(ToolError):
+        await server.detmir_search("lego technic")
+    with pytest.raises(StopGateError):
+        await server._limiter.wait()
+    assert len(urls) == 1
 
 
 # -------------------------------------------------------------------- card ----
@@ -386,13 +478,14 @@ async def test_selfcheck_reports_success_when_every_family_is_healthy(monkeypatc
             "/v2/categories": CATEGORIES_PAYLOAD,
         },
     )
+    stub_page(monkeypatch, (200, SEARCH_HTML))
 
     result = await server.detmir_selfcheck()
 
     assert result.status == "success"
-    assert set(result.checks) == {"card", "category", "categories"}
+    assert set(result.checks) == {"search", "card", "category", "categories"}
     assert all(entry.state == "healthy" for entry in result.checks.values())
-    assert result.tool_count == 3
+    assert result.tool_count == 4
 
 
 async def test_selfcheck_is_inconclusive_when_transport_fails(monkeypatch, no_delay):
@@ -402,7 +495,11 @@ async def test_selfcheck_is_inconclusive_when_transport_fails(monkeypatch, no_de
     async def always_down(url: str, label: str, ctx=None):
         raise_tool_error(TransportDownError("upstream unreachable", provider="detmir"))
 
+    async def request_down(url: str, label: str):
+        raise_tool_error(TransportDownError("upstream unreachable", provider="detmir"))
+
     monkeypatch.setattr(server, "_fetch_json", always_down)
+    monkeypatch.setattr(server, "_request", request_down)
 
     result = await server.detmir_selfcheck()
 
@@ -573,9 +670,9 @@ async def test_different_regions_do_not_share_a_cache_entry(monkeypatch):
     assert urls[0] != urls[1], "a St Petersburg request must not be answerable from Moscow's cache"
 
 
-async def test_all_three_tools_are_still_registered():
+async def test_all_four_tools_are_still_registered():
     names = {tool.name for tool in await server.mcp.list_tools()}
-    assert names == {"detmir_card", "detmir_category", "detmir_categories"}
+    assert names == {"detmir_search", "detmir_card", "detmir_category", "detmir_categories"}
 
 
 async def test_a_418_is_reported_as_an_edge_block(monkeypatch, no_delay):
@@ -584,13 +681,17 @@ async def test_a_418_is_reported_as_an_edge_block(monkeypatch, no_delay):
     Verified live on 2026-09-21: the same 418 came back for httpx with this
     connector's own headers, for httpx with no headers at all, and for curl_cffi's
     Chrome impersonation. The address is refused before any parser runs, so a bare
-    "unexpected HTTP 418" invites an operator to debug the wrong thing.
+    "unexpected HTTP 418" invites an operator to debug the wrong thing. It is a
+    refusal, so Detsky Mir stops.
     """
+    calls: list[str] = []
 
-    async def edge_418(client, url, **kwargs):
-        return 418, ""
+    async def edge_418(url, **kwargs):
+        calls.append(url)
+        return Reply(418, "", None)
 
-    monkeypatch.setattr(server, "get_text_with_retries", edge_418)
+    monkeypatch.setattr(impersonated, "impersonated_get", edge_418)
+    monkeypatch.setattr(server, "_limiter", Pacer(0.0, source="detsky_mir", gate=StopGate(None)))
 
     with pytest.raises(ToolError) as excinfo:
         await server._fetch_json("https://api.detmir.ru/v2/products/1", "detmir_card", None)
@@ -599,6 +700,10 @@ async def test_a_418_is_reported_as_an_edge_block(monkeypatch, no_delay):
     assert payload["error"] == "transport_down"
     assert "DDoS-Guard" in payload["message"], payload["message"]
     assert payload["status_code"] == 418
+    with pytest.raises(ToolError) as excinfo:
+        await server._fetch_json("https://api.detmir.ru/v2/products/2", "detmir_card", None)
+    assert json.loads(str(excinfo.value))["source_stopped"] is True
+    assert len(calls) == 1
 
 
 async def test_selfcheck_says_blocked_when_the_edge_refuses(monkeypatch, no_delay):

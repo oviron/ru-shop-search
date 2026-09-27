@@ -1,30 +1,25 @@
 """Detsky Mir MCP connector.
 
-The easiest of the Russian marketplaces to read: ``api.detmir.ru`` answers plain
-anonymous HTTPS — no credentials, no TLS impersonation, no browser. Verified
-live Jul 2026 from a datacenter IP, which Ozon and Megamarket both refuse.
+Anonymous HTTPS through curl_cffi as Chrome, from a Russian home IP: a
+datacenter address gets DDoS-Guard's 418 for the whole domain.
 
 Endpoints this connector depends on:
-  - ``GET /v2/products/{id}``  — single product card (~100 KB).
-  - ``GET /v4/products?filter=…`` — category listing, paginated.
-  - ``https://www.detmir.ru/catalog/search/?q=…`` — text search (SSR HTML).
+  - ``GET www.detmir.ru/search/results/?qt=…`` — text search, the site's own SSR page;
+    products sit in ``window.appData`` (verified live 2026-09-27).
+  - ``GET api.detmir.ru/v2/products/{id}``  — single product card (~100 KB).
+  - ``GET api.detmir.ru/v4/products?filter=…`` — category listing, paginated.
 
-Three upstream quirks worth knowing, each verified live:
+Quirks, each verified live:
 
 1. **404 inside a 200.** A missing product returns HTTP 200 with
-   ``{"status": 404}`` in the body. Status codes alone cannot be trusted, so the
-   body is always inspected.
-2. **v4, not v2, for listings.** The old ``/v2/products?filter=`` listing path is
-   gone (404). Every parser written before ~2025 is broken.
-3. **There is no usable text search — deliberately not exposed.** Every text key
-   inside the v4 ``filter`` (``q:``, ``phrase:``, ``search:``, ``text:``) is
-   silently ignored and returns the whole 300k-item catalog. The site's
-   ``/catalog/search/`` route answers HTTP 404 and renders a promo carousel, not
-   results — scraping it yields plausible-looking products that have nothing to do
-   with the query, which is worse than no tool at all. Discovery therefore goes
-   through ``detmir_categories`` -> ``detmir_category``.
+   ``{"status": 404}`` in the body, so the body is always inspected.
+2. **v4, not v2, for listings.** ``/v2/products?filter=`` is gone (404).
+3. **No text key in the API.** ``q:``, ``phrase:``, ``search:`` and ``text:`` in
+   the v4 ``filter`` are ignored and return the whole catalog; ``/catalog/search/``
+   is a promo page. Only ``/search/results/`` searches.
 
-Sporadic 502s and read timeouts are normal here; transport retries absorb them.
+A 401/403/418/429 stops Detsky Mir for 30 minutes; only network faults and
+502/503/504 are retried, once.
 
 NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC. Use
 ``log_event`` (stderr) or the ``Context`` logging methods.
@@ -39,7 +34,6 @@ import re
 import urllib.parse
 from typing import Annotated, Any
 
-import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware.error_handling import RetryMiddleware
 from mcp.types import ToolAnnotations
@@ -47,9 +41,9 @@ from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     NotFoundError,
     ParserDriftError,
-    RateLimitedError,
     TransportDownError,
     raise_tool_error,
 )
@@ -57,7 +51,8 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport import DEFAULT_USER_AGENT, build_client, get_text_with_retries, proxy_from_env
+from mcp_core.transport import proxy_from_env
+from mcp_core.transport.impersonated import Reply, shop_request
 from pydantic import Field
 
 from detmir_connector.models_output import (
@@ -81,16 +76,13 @@ API_BASE = "https://api.detmir.ru"
 SITE_BASE = "https://www.detmir.ru"
 
 HEADERS = {
-    "User-Agent": DEFAULT_USER_AGENT,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ru-RU,ru;q=0.9",
     "Referer": f"{SITE_BASE}/",
     "Origin": SITE_BASE,
 }
 
-# Product ids appear in page URLs as /product/index/id/<digits>/ — the only
-# reliable handle on search results, since the SSR markup itself is volatile.
-_PRODUCT_ID_RE = re.compile(r"/product/index/id/(\d{3,12})")
+_APP_DATA_RE = re.compile(r"window\.appData\s*=\s*JSON\.parse\(")
 
 # A category alias is a URL slug. Anything else is rejected before it can be
 # interpolated into a filter expression.
@@ -131,56 +123,48 @@ def _resolve_region(region: str | None) -> str:
     return candidate
 
 
+async def _request(url: str, label: str) -> Reply:
+    try:
+        return await shop_request(
+            url,
+            pacer=_limiter,
+            provider="detsky_mir",
+            label=label,
+            headers=HEADERS,
+            timeout_s=_settings.timeout,
+            max_bytes=_settings.max_body_bytes,
+            retries=min(_settings.net_retries, 1),
+            backoff_s=_settings.net_backoff_s,
+            proxy=_proxy(),
+        )
+    except ConnectorError as exc:
+        if exc.to_dict().get("status_code") == 418:
+            raise_tool_error(
+                TransportDownError(
+                    f"{label}: refused by the DDoS-Guard edge (HTTP 418), this address is blocked; "
+                    "Detsky Mir is stopped for 30 min, do not retry",
+                    provider="detmir",
+                    status_code=418,
+                )
+            )
+        raise_tool_error(exc)
+
+
 async def _fetch_json(url: str, label: str, ctx: Context | None) -> Any:
-    """GET ``url`` and parse it as JSON, with caching and bounded retries."""
+    """GET ``url`` and parse it as JSON, cached; a refusal stops Detsky Mir."""
 
     async def fetch() -> Any:
         if ctx is not None:
             await ctx.debug(f"{label}: {url}")
-        client = build_client(timeout_s=_settings.timeout, headers=HEADERS, proxy=_proxy())
-        async with client:
-            try:
-                status, text = await get_text_with_retries(
-                    client,
-                    url,
-                    max_bytes=_settings.max_body_bytes,
-                    retries=_settings.net_retries,
-                    backoff_s=_settings.net_backoff_s,
-                    limiter=_limiter,
-                )
-            except httpx.TransportError as exc:
-                detail = _redact(str(exc)).strip() or "(no message)"
-                raise_tool_error(TransportDownError(f"{label}: {type(exc).__name__}: {detail}", provider="detmir"))
-                raise AssertionError("unreachable") from exc  # pragma: no cover
-
-        if status == 429:
-            raise_tool_error(RateLimitedError("detmir"))
-        if status >= 500:
-            raise_tool_error(
-                TransportDownError(f"{label}: upstream HTTP {status}", provider="detmir", status_code=status)
-            )
-        if status == 418:
-            # DDoS-Guard answers 418 for the whole domain from an address it does
-            # not like, before any parser runs. Verified live on 2026-09-21: the
-            # same 418 came back for httpx with the connector's own headers, for
-            # httpx with no headers at all, and for curl_cffi's Chrome
-            # impersonation — so this is an address refusal, not request shaping
-            # and not drift. Say so instead of "unexpected HTTP 418".
+        reply = await _request(url, label)
+        if reply.status != 200:
             raise_tool_error(
                 TransportDownError(
-                    f"{label}: refused by the DDoS-Guard edge (HTTP 418) — this address is blocked, "
-                    "the parser never ran",
-                    provider="detmir",
-                    status_code=status,
+                    f"{label}: unexpected HTTP {reply.status}", provider="detmir", status_code=reply.status
                 )
             )
-        if status != 200:
-            raise_tool_error(
-                TransportDownError(f"{label}: unexpected HTTP {status}", provider="detmir", status_code=status)
-            )
-
         try:
-            return json.loads(text)
+            return json.loads(reply.text or "")
         except json.JSONDecodeError as exc:
             raise_tool_error(ParserDriftError(f"{label}: response was not valid JSON ({exc})", provider="detmir"))
             raise AssertionError("unreachable") from exc  # pragma: no cover
@@ -264,6 +248,7 @@ def _parse_product(raw: Any) -> DetmirProduct:
         picture = str(pictures[0].get("web") or pictures[0].get("original") or pictures[0].get("url") or "")
 
     product_id = R.coerce_int(R.first_present(raw, "id", "product_id", default=None))
+    barcodes = [code for code in _as_list(raw.get("bar_codes")) if isinstance(code, str) and code.isdigit()]
     url = str(link_node.get("web_url") or "")
     if not url and product_id:
         url = f"{SITE_BASE}/product/index/id/{product_id}/"
@@ -287,14 +272,45 @@ def _parse_product(raw: Any) -> DetmirProduct:
         review_count=R.coerce_int(R.first_present(raw, "review_count", "reviews_count", default=None)),
         questions_count=R.coerce_int(R.first_present(raw, "questions_count", default=None)),
         availability=str(R.first_present(raw, "availability", default="") or ""),
-        available_online=bool(online) if available else None,
-        available_offline=bool(offline) if available else None,
+        available_online=bool(online) if available else _opt_bool(raw.get("isAvailableOnline")),
+        available_offline=bool(offline) if available else _opt_bool(raw.get("isAvailableOffline")),
         store_count=len(stores) if offline else None,
         is_marketplace=raw.get("is_from_marketplace") if isinstance(raw.get("is_from_marketplace"), bool) else None,
         vendor=str(vendor_node.get("title") or "") if vendor_node else "",
         url=url,
         picture=picture,
+        barcodes=barcodes,
     )
+
+
+def _opt_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _app_data(html: str) -> dict[str, Any] | None:
+    """The ``window.appData = JSON.parse("…")`` state of an SSR page, or None."""
+    match = _APP_DATA_RE.search(html)
+    if match is None:
+        return None
+    try:
+        literal, _ = json.JSONDecoder().raw_decode(html, match.end())
+        data = json.loads(literal) if isinstance(literal, str) else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _mentions_query(text: str, items: list[Any]) -> bool:
+    """Whether any row names a query word; a 5-letter stem covers Russian endings."""
+    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
+    stems = [w[:5] for w in words if len(w) >= 3] or words
+    for item in items:
+        raw = _as_dict(item)
+        hay = " ".join([str(raw.get("title") or ""), _first_brand(raw.get("brands") or raw.get("brand"))])
+        hay = hay.lower().replace("ё", "е")
+        if any(stem in hay for stem in stems):
+            return True
+    return False
 
 
 def _product_node(payload: Any) -> dict | None:
@@ -306,6 +322,103 @@ def _product_node(payload: Any) -> dict | None:
         if "title" in payload or "id" in payload:
             return payload
     return None
+
+
+@mcp.tool(
+    name="detmir_search",
+    annotations=ToolAnnotations(
+        title="Detsky Mir Search",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def detmir_search(
+    query: Annotated[str, Field(min_length=1, max_length=200, description="Search text, e.g. 'lego technic'.")],
+    limit: Annotated[int, Field(default=20, ge=1, le=36, description="Items to return from the first page.")] = 20,
+    ctx: Context | None = None,
+) -> DetmirListResponse:
+    """Search Detsky Mir the way the site does, first page by popularity.
+
+    Prices and stock are for the region the site picks (``region``; Moscow for a
+    fresh request). ``price_rub`` is the everyday price; voucher prices are left out.
+    When nothing matches, the site pads the page with unrelated goods; those come
+    back as an empty list with a ``no_match`` warning.
+
+    ## Return Format
+
+    DetmirListResponse: {query, mode='search', total_available, returned, items,
+    region, meta}. Items carry the same product shape as detmir_card.
+
+    ## Error Format
+
+    Raises ToolError with a JSON message; a refusal stops Detsky Mir for 30 min.
+    """
+    text = " ".join(query.split())
+    if not text:
+        raise_tool_error(BadRequestError("empty search query"))
+    url = f"{SITE_BASE}/search/results/?" + urllib.parse.urlencode(
+        {"qt": text, "searchType": "common", "searchMode": "common"}, quote_via=urllib.parse.quote
+    )
+    log_event("detmir_search.start", query=text)
+    if ctx is not None:
+        await ctx.info(f"detmir_search: {text!r}")
+
+    async def fetch() -> dict[str, Any]:
+        reply = await _request(url, "detmir_search")
+        html = reply.text or ""
+        if reply.status != 200:
+            raise_tool_error(
+                TransportDownError(
+                    f"detmir_search: unexpected HTTP {reply.status}", provider="detmir", status_code=reply.status
+                )
+            )
+        data = _app_data(html)
+        if data is None:
+            if "ddos-guard" in html.lower():
+                _limiter.record_refusal("ddos-guard page")
+                raise_tool_error(
+                    TransportDownError(
+                        "detmir_search: DDoS-Guard page instead of results; Detsky Mir is stopped for 30 min",
+                        provider="detmir",
+                        status_code=403,
+                    )
+                )
+            raise_tool_error(ParserDriftError("detmir_search: no window.appData on the page", provider="detmir"))
+        return data
+
+    data = await _cache.get_or_fetch(url, fetch)
+    catalog = _as_dict(_as_dict(data.get("catalog")).get("data"))
+    if not isinstance(catalog.get("items"), list):
+        raise_tool_error(ParserDriftError("detmir_search: appData.catalog.data.items is missing", provider="detmir"))
+    products = [_parse_product(item) for item in catalog["items"][:limit]]
+    region = str(_as_dict(_as_dict(data.get("region")).get("data")).get("iso") or "")
+    total = R.coerce_int(_as_dict(catalog.get("meta")).get("length"))
+
+    warnings: list[str] = []
+    # With no exact match the site still returns hundreds of popular goods; only then are suggestions empty.
+    suggestions = _as_dict(data.get("search")).get("suggestions")
+    if products and not suggestions and not _mentions_query(text, catalog["items"]):
+        warnings.append(
+            f"no_match: Detsky Mir has no match for {text!r}; its fuzzy results were unrelated and left out"
+        )
+        products, total = [], 0
+    elif not products:
+        warnings.append(f"empty: Detsky Mir found nothing for {text!r}")
+    elif not any(p.price_rub for p in products):
+        warnings.append("no_price: search rows came back without prices")
+    _limiter.record_success()
+    log_event("detmir_search.done", query=text, returned=len(products))
+    return DetmirListResponse(
+        query=text,
+        mode="search",
+        total_available=total,
+        returned=len(products),
+        items=products,
+        region=region,
+        meta=MetaOut(source="detmir_search", healthy=not warnings, warnings=warnings),
+    )
 
 
 @mcp.tool(
@@ -443,9 +556,7 @@ async def detmir_category(
 ) -> DetmirListResponse:
     """List products in a Detsky Mir category, with the total match count.
 
-    This is the reliable way to enumerate the catalog: unlike text search, it is a
-    real JSON endpoint with proper pagination and an upstream total, so it
-    supports "what's available and how much does it cost" without scraping.
+    Paginated JSON with an upstream total: the way to walk a whole category.
 
     ## Return Format
 
@@ -560,10 +671,8 @@ async def detmir_categories(
 ) -> DetmirCategoriesResponse:
     """Browse the Detsky Mir catalog tree and get the aliases `detmir_category` needs.
 
-    This is the discovery step: Detsky Mir has **no working text search** (see the
-    module docstring), so the way to find products is to walk the tree and then
-    list a category. Each node carries its `alias` and a `products_count`, so you
-    can see where the inventory actually is before fetching a listing.
+    Each node carries its `alias` for detmir_category and a `products_count`.
+    For a text query use detmir_search.
 
     ## Return Format
 
@@ -671,7 +780,7 @@ async def detmir_selfcheck(ctx: Context | None = None) -> DetmirSelfcheckRespons
 
     DetmirSelfcheckResponse: {status, connector, checks, server_version,
     server_started_at, process_id, config_loaded, tool_count, cache_stats} —
-    checks maps card / category / categories to a per-endpoint verdict
+    checks maps search / card / category / categories to a per-endpoint verdict
     (healthy/drift/inconclusive). drift_detected and inconclusive are NOT
     errors; they are valid canary verdicts returned as a normal response.
 
@@ -709,6 +818,14 @@ async def detmir_selfcheck(ctx: Context | None = None) -> DetmirSelfcheckRespons
         ok, detail = verify(result)
         checks[name] = DetmirSelfcheckEntry(state="healthy" if ok else "drift", detail=detail)
 
+    await probe(
+        "search",
+        detmir_search(query=_settings.selfcheck_query, limit=3, ctx=None),
+        lambda r: (
+            r.returned > 0 and any(p.price_rub for p in r.items),
+            f"returned={r.returned} total={r.total_available} region={r.region}",
+        ),
+    )
     await probe(
         "card",
         detmir_card(product_id=_settings.selfcheck_product_id, ctx=None),

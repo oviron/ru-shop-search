@@ -1,6 +1,6 @@
 """Стоп магазина на первом отказе.
 
-Магазин, который ответил 401/403/429, капчей или стеной антибота, не получает
+Магазин, который ответил 401/403/418/429, капчей или стеной антибота, не получает
 ни одного запроса до конца кулдауна. Состояние лежит в ``${CLAUDE_PLUGIN_DATA}``,
 чтобы перезапуск сервера или новая сессия не обнуляли стоп.
 """
@@ -23,7 +23,7 @@ __all__ = ["DEFAULT_COOLDOWN_S", "SourceStoppedError", "StopGate", "default_gate
 DEFAULT_COOLDOWN_S = 1800.0
 _STATE_FILE = "stopped_sources.json"
 _REFUSAL_CODES = frozenset({ErrorCode.RATE_LIMITED, ErrorCode.CHALLENGE_REQUIRED, ErrorCode.PERMISSION_DENIED})
-_REFUSAL_STATUSES = frozenset({401, 403, 429})
+_REFUSAL_STATUSES = frozenset({401, 403, 418, 429})
 
 
 class SourceStoppedError(ConnectorError):

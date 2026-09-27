@@ -45,6 +45,7 @@ class DetmirProduct(BaseModel):
     vendor: str = Field(default="", description="Marketplace seller name, when the item is not sold by Detsky Mir.")
     url: str = Field(default="", description="Canonical product page URL.")
     picture: str = Field(default="", description="Primary product image URL.")
+    barcodes: list[str] = Field(default_factory=list, description="EAN/GTIN barcodes the shop lists for the item.")
 
 
 class DetmirCardResponse(BaseModel):

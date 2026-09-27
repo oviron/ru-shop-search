@@ -1,0 +1,9 @@
+{
+  "url": "https://www.detmir.ru/search/results/?qt=lego%20technic&searchType=common&searchMode=common",
+  "captured_at": "2026-09-27",
+  "sha256": "bfdda628bee0e32a7f19660804d32eed424c4e02d6b25588a616eb3423c1d579",
+  "method": "captured live on 2026-09-27 19:35 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 851 KB page. Kept only window.appData.region.data (country, region, code, iso) and catalog.data (meta limit/offset/length/title and four of the 36 items, each cut to the keys the connector reads plus prices/priceWithBestVoucher), plus search.suggestions cut to the first two (type and title), re-serialised in the same JSON.parse(\"…\") form; the surrounding HTML is a minimal stand-in",
+  "ground_truth": {
+    "note": "region RU-MOW, 424 matches. Ford Bronco 6750060 7 199 ₽ (was 9 499), Ferrari FXX K 6750058 6 083 ₽ (was 9 499), Bugatti 6024094 4 399 ₽ (was 8 199) in stores only, not online; marketplace item 7144669 159 999 ₽ with a promo-code price of 143 999 ₽ in priceWithBestVoucher, which is not the price"
+  }
+}
