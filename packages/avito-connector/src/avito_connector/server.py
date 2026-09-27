@@ -1,34 +1,13 @@
-"""Avito MCP connector.
+"""Avito MCP connector: listings search and item pages, read in the plugin's Chrome tab.
 
-Avito sits behind an IP-reputation firewall: a datacenter address gets HTTP 403
-with a captcha challenge on every route that matters, including the internal
-``/web/1/js/items`` search API. TLS impersonation alone does not clear it — the
-endpoint answers from a residential Russian IP with a warmed-up session, and
-always from the operator's logged-in Chrome over CDP. This connector therefore
-mirrors the Ozon two-tier layout: try impersonated HTTPS first, fall back to a
-fetch inside the real browser.
+Avito bans by IP reputation and request rate, so there is one transport and no second
+try: the tab opens the ``/web/1/js/items`` search API as a document (one navigation,
+the JSON is the page text) or an item page. Any 401/403/418/429, a block page, a
+firewall JSON or a redirect off avito.ru stops Avito for 30 minutes.
 
-Verified live July 2026 from a datacenter IP (docs/ANTI_BOT.md):
-  - ``https://www.avito.ru/web/1/js/items`` — 403 + firewall captcha from a DC
-  - search HTML pages — 403 «Доступ ограничен: проблема с IP»
-  - the same endpoint answers 200 from a residential session (third-party
-    parsers depend on it: Duff89/parser_avito)
+A missing price is None, never 0: exchange and price-on-request ads would rank cheapest.
 
-Behaviours that shape this code:
-
-**Items, not products.** Avito is classifieds: a listing is a one-off ad with a
-seller, not a catalog SKU with reviews. There is no review pool per item —
-seller reputation is the review signal, exposed via avito_seller.
-
-**A missing price is None, never 0.** Some listings (exchange, free, price on
-request) carry no price; a zero would rank them cheapest in compare_prices.
-
-**The block page looks like content.** A 403 arrives with cookies set and a
-plausible HTML body, so only JSON-shaped 200s count as success; anything else
-falls through to the CDP tier.
-
-NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC. Use
-``log_event`` (stderr) or the ``Context`` logging methods.
+NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC.
 """
 
 from __future__ import annotations
@@ -38,16 +17,15 @@ import datetime
 import json
 import re
 import urllib.parse
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, NoReturn
 
-from curl_cffi import requests as cffi
 from fastmcp import Context, FastMCP
-from fastmcp.server.middleware.error_handling import RetryMiddleware
 from mcp.types import ToolAnnotations
 from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ChallengeRequiredError,
     ConnectorError,
     NotFoundError,
     ParserDriftError,
@@ -58,17 +36,18 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
+from mcp_core.query_match import names_query
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport.chrome_cdp import NavBlocked, open_page
+from mcp_core.stopgate import SourceStoppedError
+from mcp_core.transport.chrome_cdp import NavBlocked, NavigationPolicyError, open_page
 from pydantic import Field
 
 from avito_connector.models_output import (
     AvitoCardResponse,
+    AvitoCardSellerOut,
     AvitoSearchItemOut,
     AvitoSearchResponse,
     AvitoSelfcheckResponse,
-    AvitoSellerOut,
-    AvitoSellerResponse,
     MetaOut,
 )
 from avito_connector.settings import get_settings
@@ -81,225 +60,153 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 
 SITE_BASE = "https://www.avito.ru"
 ITEMS_API = f"{SITE_BASE}/web/1/js/items"
+_HOSTS = frozenset({"avito.ru", "www.avito.ru"})
+MAX_BODY_CHARS = _settings.max_body_chars
 
-TIMEOUT = _settings.timeout
-MAX_BODY_BYTES = _settings.max_body_bytes
-IMPERSONATE = _settings.impersonate
 _min_gap = _settings.min_gap
-
-AVITO_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "ru-RU,ru;q=0.9",
-    "Referer": f"{SITE_BASE}/",
-}
-
-# Item URL slugs: /moskva/noutbuki/thinkpad_x1_1234567890 — the id is the tail.
-_ITEM_ID_RE = re.compile(r"_(\d{6,})(?:\?|/|$)")
 _LOCATION_ID_RE = re.compile(r"^\d{2,10}$")
+_ITEM_PATH_RE = re.compile(r"^/[a-z0-9_-]+/[a-z0-9_-]+/[a-z0-9_-]*_(\d{6,})/?$")
+_REFUSAL_STATUSES = frozenset({401, 403, 418, 429})
+_GONE = frozenset({404, 410})
+_FIREWALL_MARKERS = ("firewall", "too-many-requests")
+_RENDER_WAIT_S = 10.0
+_POLL_S = 0.5
+_SORT = {"default": None, "price_asc": "1", "price_desc": "2", "date": "104"}
+_SELLER_TYPE = {"any": None, "private": "1", "company": "2"}
 
 mcp = FastMCP(
     name="avito-connector",
     version=SERVER_VERSION,
     instructions=(
-        "Avito listings: search, item cards and seller profiles. Read-only, no "
-        "credentials. Tier 1 is impersonated HTTPS (works from residential RU "
-        "IPs); tier 2 fetches inside the operator's logged-in Chrome over CDP. "
-        "Start with avito_search; avito_card takes an item id or URL; "
-        "avito_seller takes a seller profile URL or id from a card/search hit."
+        "Avito listings (used and new, from private sellers and shops): avito_search lists "
+        "ads for a query with price/sort/delivery/seller-type filters, avito_card reads one "
+        "ad page. Read-only, no login. A refusal stops Avito for 30 minutes."
     ),
 )
-mcp.add_middleware(RetryMiddleware())
 
-_cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=256)
+_cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
 _pacer = Pacer(_min_gap, source="avito")
 _cdp_lock = asyncio.Lock()
 
+# Chrome shows a JSON document as <body><pre>…</pre>, plus a viewer the pre excludes.
+_JSON_READ_JS = """
+() => {
+    const pre = document.querySelector('body > pre');
+    const raw = (pre || document.body || document.documentElement).textContent || '';
+    return JSON.stringify({
+        page_title: document.title || '',
+        size: raw.length,
+        text: raw.length > MAX_BODY_CHARS ? '' : raw,
+    });
+}
+""".replace("MAX_BODY_CHARS", str(MAX_BODY_CHARS))
 
-def _proxy() -> str | None:
-    return _settings.proxy.get_secret_value() or None
-
-
-async def _polite_wait() -> None:
-    """Space this source's requests out, and back off if it refused us.
-
-    Reads ``_min_gap`` at call time so an operator or a test can retune the
-    pace without rebuilding the pacer.
-    """
-    await _pacer.wait(min_gap=_min_gap)
-
-
-def _sync_curl_get(url: str, proxy: str | None = None) -> tuple[int, str]:
-    """Tier-1: curl_cffi GET with an incremental body cap (see ozon_connector)."""
-    kwargs: dict[str, Any] = {}
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
-    chunks: list[bytes] = []
-    total = 0
-    r = cffi.get(url, headers=AVITO_HEADERS, impersonate=cast(Any, IMPERSONATE), timeout=TIMEOUT, stream=True, **kwargs)
-    try:
-        encoding = r.encoding or "utf-8"
-        for chunk in r.iter_content(chunk_size=64 * 1024):
-            total += len(chunk)
-            if total > MAX_BODY_BYTES:
-                raise ValueError(f"body exceeds {MAX_BODY_BYTES} bytes (aborted at {total} during stream)")
-            chunks.append(chunk)
-        body = b"".join(chunks)
-        try:
-            text = body.decode(encoding, errors="replace")
-        except (LookupError, TypeError):
-            text = body.decode("utf-8", errors="replace")
-        return r.status_code, text
-    finally:
-        try:
-            r.close()
-        except Exception:
-            pass
-
-
-async def _cdp_fetch(url: str, ctx: Context | None) -> tuple[int, str]:
-    """Tier-2: run the fetch inside the operator's logged-in Chrome.
-
-    Serialized via _cdp_lock so a burst of tool calls cannot spray tabs. The
-    in-page JS enforces the same body cap as tier 1 — an inflated body would
-    otherwise OOM the connector through the CDP serialization pipeline.
-    """
-
-    async def _attempt() -> tuple[int, str]:
-        async with _cdp_lock, open_page(f"{SITE_BASE}/", wait_ms=4000) as page:
-            raw = await asyncio.wait_for(
-                page.evaluate(
-                    """async (args) => {
-                    const res = await fetch(args.url, {
-                        credentials: 'include',
-                        headers: {'Accept': 'application/json, text/plain, */*'}
-                    });
-                    const reader = res.body.getReader();
-                    let total = 0;
-                    let chunks = [];
-                    while (true) {
-                        const {done, value} = await reader.read();
-                        if (done) break;
-                        total += value.length;
-                        if (total > args.cap) {
-                            return JSON.stringify({status: 0, text: 'BODY_CAP_EXCEEDED'});
-                        }
-                        chunks.push(value);
-                    }
-                    const buf = new Uint8Array(total);
-                    let off = 0;
-                    for (const c of chunks) { buf.set(c, off); off += c.length; }
-                    const text = new TextDecoder().decode(buf);
-                    return JSON.stringify({status: res.status, text: text});
-                }""",
-                    {"url": url, "cap": MAX_BODY_BYTES},
-                ),
-                timeout=30.0,
-            )
-        result = json.loads(raw) if isinstance(raw, str) else raw
-        return result["status"], result["text"]
-
-    try:
-        return await asyncio.wait_for(_attempt(), timeout=max(0.01, float(TIMEOUT)))
-    except TimeoutError:
-        return 0, f"CDP timeout after {TIMEOUT}s"
+# Seller names stay on the page: only reputation leaves the tab.
+_CARD_EXTRACT_JS = """
+() => {
+    const text = el => el ? ((el.textContent || '').replace(/\\s+/g, ' ').trim() || null) : null;
+    const q = sel => document.querySelector(sel);
+    const title = text(q('[data-marker="item-view/title-info"]')) || text(q('h1[itemprop="name"]'));
+    const priceEl = q('[data-marker="item-view/item-price"]') || q('[itemprop="price"]');
+    const seller = q('[data-marker="seller-info"]');
+    const since = seller ? (seller.textContent.match(/На Авито с[^\\n]*?\\d{4}/) || [null])[0] : null;
+    const head = document.body ? document.body.textContent.slice(0, 3000) : '';
+    return JSON.stringify({
+        page_title: document.title || '',
+        title,
+        firewall: !title && /Доступ ограничен|проблема с IP/i.test(head),
+        captcha: /captcha|blocked/i.test(document.location.pathname)
+            || !!q('iframe[src*="captcha"], form[action*="captcha"], .g-recaptcha, .h-captcha'),
+        price: priceEl ? (priceEl.getAttribute('content') || text(priceEl)) : null,
+        description: text(q('[data-marker="item-view/item-description"]')),
+        params: [...document.querySelectorAll('[data-marker="item-view/item-params"] li')].map(text).filter(Boolean).slice(0, 40),
+        posted: text(q('[data-marker="item-view/item-date"]')),
+        views: text(q('[data-marker="item-view/total-views"]')),
+        photos: document.querySelectorAll('[data-marker="image-preview/item"]').length,
+        delivery: !!q('[data-marker*="delivery"]'),
+        seller_kind: seller ? text(seller.querySelector('[data-marker="seller-info/label"]')) : null,
+        seller_rating: seller ? text(seller.querySelector('[data-marker="seller-info/score"]')) : null,
+        seller_reviews: seller ? text(seller.querySelector('[data-marker="seller-info/summary"]')) : null,
+        seller_since: since ? since.replace(/\\s+/g, ' ').trim() : null,
+    });
+}
+"""
 
 
-def _looks_like_json(body: str) -> bool:
-    stripped = body.lstrip()
-    return stripped.startswith("{") or stripped.startswith("[")
+def _refuse(reason: str, error: ConnectorError) -> NoReturn:
+    _pacer.record_refusal(reason)
+    raise_tool_error(error)
 
 
-async def _fetch(url: str, ctx: Context | None) -> tuple[int, str, str]:
-    """Tier-1 first; CDP fallback on block/non-200. Returns (status, body, tier).
-
-    Only JSON-shaped 200s are cached — a cached block page would keep reporting
-    a block after the challenge cleared.
-    """
-    cached = _cache.get(url)
-    if cached is not None:
-        status, body = cached
-        return status, body, "cache"
-
-    await _polite_wait()
-
-    try:
-        status, body = await asyncio.to_thread(_sync_curl_get, url, _proxy())
-        if status == 200 and _looks_like_json(body):
-            _pacer.record_success()
-            _cache.set(url, (status, body))
-            return status, body, "curl_cffi"
-        if ctx and status in (401, 403, 429):
-            await ctx.debug(f"Avito tier-1 HTTP {status} (firewall); trying CDP")
-    except Exception as exc:
-        if ctx:
-            # A connect failure quotes the proxy URL, credentials included —
-            # the same redaction every other error path gets, not an exception.
-            await ctx.debug(_redact(f"Avito tier-1 exception: {exc}; trying CDP"))
-
-    try:
-        status, body = await _cdp_fetch(url, ctx)
-        if status == 200 and _looks_like_json(body):
-            _cache.set(url, (status, body))
-        return status, body, "cdp"
-    except NavBlocked as exc:
-        if exc.status:
-            return exc.status, str(exc), "cdp_blocked"
-        return 0, str(exc), "cdp_failed"
-    except Exception as exc:
-        return 0, str(exc), "cdp_failed"
-
-
-def _blocked_error(tier: str, detail: str = "") -> TransportDownError:
-    message = (
-        f"Avito returned an IP-firewall block via {tier}. "
-        "Open avito.ru in the Chrome CDP profile, solve the captcha, then retry; "
-        "from a datacenter IP a Russian residential proxy (AVITO_PROXY) is the tier-1 fix."
+def _blocked(status: int, what: str = "refused the browser tab") -> TransportDownError:
+    return TransportDownError(
+        f"Avito {what} (HTTP {status}); Avito is stopped for 30 min, do not retry.",
+        provider="avito",
+        status_code=status,
     )
-    hint = _pacer.rotation_hint()
-    if hint:
-        message += f" {hint}"
-    if detail:
-        message += f" Detail: {detail[:160]}"
-    return TransportDownError(message, status_code=403)
 
 
-def _raise_for_fetch_failure(status: int, body: str, tier: str, what: str) -> None:
-    """Map a failed fetch to the shared error taxonomy.
-
-    Refusals are reported to the pacer on the way out. Avito bans by IP
-    reputation and request rate, so the call after a refusal waits longer, and
-    a run of them earns the operator a straight answer about what to change
-    rather than a fifth identical "blocked".
-    """
-    if status in (401, 403) or "firewall" in body[:300] or "too-many-requests" in body[:300]:
-        _pacer.record_refusal()
-        raise_tool_error(_blocked_error(tier, body))
-    if status == 429:
-        _pacer.record_refusal()
-        raise_tool_error(_blocked_error(tier, body))
-    if status == 404:
-        raise_tool_error(NotFoundError(f"Avito {what} not found (404)."))
-    raise_tool_error(TransportDownError(f"Avito {what} fetch failed: HTTP {status} via {tier}. {body[:120]}"))
+def _captcha() -> ChallengeRequiredError:
+    return ChallengeRequiredError(
+        "Avito showed a captcha in the plugin's tab; Avito is stopped for 30 min, do not retry.",
+        provider="avito",
+        challenge_type="avito_firewall",
+        status_code=403,
+    )
 
 
-def _extract_item_id(raw: str) -> int | None:
-    """Pull the numeric item id out of a slug, URL or bare digits.
+async def _open(url: str, js: str, ready: Any) -> dict[str, Any]:
+    """One navigation to ``url``; poll ``js`` until ``ready`` or the deadline. Refusals stop Avito."""
+    async with _cdp_lock:
+        try:
+            await _pacer.wait(min_gap=_min_gap)
+        except SourceStoppedError as exc:
+            raise_tool_error(exc)
+        try:
+            async with open_page(url, wait_ms=0, allowed_hosts=_HOSTS) as page:
+                deadline = asyncio.get_running_loop().time() + _RENDER_WAIT_S
+                while True:
+                    raw = await asyncio.wait_for(page.evaluate(js), timeout=30.0)
+                    data = json.loads(raw) if isinstance(raw, str) else None
+                    if not isinstance(data, dict):
+                        raise_tool_error(ParserDriftError("tab reader returned a non-object", provider="avito"))
+                    if ready(data) or asyncio.get_running_loop().time() >= deadline:
+                        break
+                    await asyncio.sleep(_POLL_S)
+        except NavBlocked as exc:
+            if exc.status in _REFUSAL_STATUSES:
+                _refuse(f"http {exc.status}", _blocked(exc.status))
+            if exc.status in _GONE:
+                _pacer.record_success()
+                raise_tool_error(NotFoundError("Avito has no such page", provider="avito"))
+            raise_tool_error(
+                TransportDownError(f"Avito page failed (HTTP {exc.status})", provider="avito", status_code=exc.status)
+            )
+        except NavigationPolicyError:
+            _refuse("redirect off avito.ru", _blocked(403, "redirected the tab off avito.ru"))
+    return data
 
-    Item ids run 9-12 digits today; the regex enforces a 6-digit floor so a
-    short numeric fragment ("123") is rejected instead of fetched as an id that
-    never existed.
-    """
-    raw = raw.strip()
-    if raw.isdigit():
-        return int(raw) if len(raw) >= 6 else None
-    match = _ITEM_ID_RE.search(raw)
-    if match:
-        return int(match.group(1))
-    return None
+
+async def _open_json(url: str) -> dict[str, Any]:
+    data = await _open(url, _JSON_READ_JS, lambda d: bool(d.get("text")))
+    size = data.get("size")
+    if not isinstance(size, int) or size > MAX_BODY_CHARS:
+        raise_tool_error(TransportDownError("Avito answer missing or over the body cap", provider="avito"))
+    text = str(data.get("text") or "").strip()
+    if not text:
+        raise_tool_error(TransportDownError("Avito answer did not load in time", provider="avito"))
+    if text[0] not in "{[":
+        _refuse("a page instead of JSON", _blocked(200, "answered with a page instead of JSON"))
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        raise_tool_error(TransportDownError("Avito answer is cut-off JSON", provider="avito"))
+    if not isinstance(payload, dict):
+        raise_tool_error(ParserDriftError("js/items payload is not a JSON object", provider="avito"))
+    if not _parse_search_items(payload)[0] and any(m in text[:300].lower() for m in _FIREWALL_MARKERS):
+        _refuse("firewall answer", _blocked(403, "answered with a firewall block"))
+    _pacer.record_success()
+    return payload
 
 
 def _valid_location_id(raw: str) -> bool:
@@ -388,6 +295,8 @@ def _parse_search_items(payload: dict) -> tuple[list[dict[str, Any]], int | None
                 it.get("geo"), "formattedAddress", "name", "title"
             )
         seller = it.get("seller") if isinstance(it.get("seller"), dict) else {}
+        rating: dict[str, Any] = it["rating"] if isinstance(it.get("rating"), dict) else {}
+        category: dict[str, Any] = it["category"] if isinstance(it.get("category"), dict) else {}
         images = it.get("images")
         images_count = (
             len(images)
@@ -401,11 +310,9 @@ def _parse_search_items(payload: dict) -> tuple[list[dict[str, Any]], int | None
                 "price_rub": price,
                 "url": uri or None,
                 "location": location,
-                "seller_name": R.first_present(seller, "name", "title")
-                if seller
-                else R.first_present(it, "sellerName"),
-                "seller_id": str(R.first_present(seller if seller else {}, "id", "userId", "user_id", default="") or "")
-                or None,
+                "category_id": R.coerce_int(category.get("id")),
+                "seller_rating": R.coerce_rating(rating.get("score")),
+                "seller_reviews": _first_int(rating.get("summary")),
                 "is_company": R.first_present(seller, "isCompany", "is_company") if seller else None,
                 "posted_at": _posted_at(it),
                 "images": images_count,
@@ -414,7 +321,7 @@ def _parse_search_items(payload: dict) -> tuple[list[dict[str, Any]], int | None
     return out, total
 
 
-def _build_search_url(query: str, page: int, location_id: str, category_id: str | None) -> str:
+def _search_url(query: str, page: int, location_id: str, category_id: str | None, extra: dict[str, str]) -> str:
     params: dict[str, str] = {
         "q": query,
         "p": str(page),
@@ -424,6 +331,7 @@ def _build_search_url(query: str, page: int, location_id: str, category_id: str 
     }
     if category_id:
         params["categoryId"] = category_id
+    params.update(extra)
     return f"{ITEMS_API}?{urllib.parse.urlencode(params)}"
 
 
@@ -440,24 +348,37 @@ async def avito_search(
         str | None, Field(description="Avito location id; default AVITO_LOCATION_ID (637640 = Moscow)")
     ] = None,
     category_id: Annotated[str | None, Field(description="Optional Avito category id to narrow the search")] = None,
+    price_min: Annotated[int | None, Field(ge=0, description="Lowest price, rubles")] = None,
+    price_max: Annotated[int | None, Field(ge=0, description="Highest price, rubles")] = None,
+    sort: Annotated[
+        Literal["default", "price_asc", "price_desc", "date"], Field(description="Avito's order of results")
+    ] = "default",
+    delivery_only: Annotated[bool, Field(description="Only ads with Avito delivery")] = False,
+    seller_type: Annotated[Literal["any", "private", "company"], Field(description="Private sellers or shops")] = "any",
     ctx: Context | None = None,
 ) -> AvitoSearchResponse:
-    """Search Avito listings via the internal js/items API.
+    """Search Avito listings through the site's js/items API, opened in the plugin's tab.
+
+    Filters go to Avito as the site's own URL parameters; price bounds are also
+    re-applied here. When no title names the query the page is dropped as ``no_match``.
 
     ## Return Format
 
     AvitoSearchResponse: {status, query, page, location_id, tier_used, count,
-    total_count, items[], meta}. Items carry item_id, title, price_rub (None
-    when the ad has no price — never 0), url, location, seller fields.
+    total_count, items[], meta}. Items carry item_id, title, price_rub (None when the
+    ad has no price — never 0), url, location, category_id, seller_rating, seller_reviews.
 
     ## Error Format
 
-    ToolError: BadRequestError on malformed arguments; TransportDownError on
-    firewall blocks (with the captcha/proxy guidance inline); ParserDriftError
-    when a reached-200 body no longer parses as the expected envelope.
+    ToolError: bad_request on malformed arguments; transport_down with source_stopped
+    on 401/403/418/429, a block page, a firewall answer or a redirect off avito.ru
+    (Avito stops for 30 min); parser_drift when the answer is JSON of another shape.
     """
-    log_event("avito_search.start", query=query[:60], page=page)
+    text = " ".join(query.split())
+    log_event("avito_search.start", query=text[:60], page=page)
     try:
+        if not text:
+            raise_tool_error(BadRequestError("empty search query"))
         if location_id is not None and not location_id.strip():
             raise_tool_error(BadRequestError("location_id must not be empty"))
         loc = (location_id or _settings.location_id).strip()
@@ -465,34 +386,56 @@ async def avito_search(
             raise_tool_error(BadRequestError(f"location_id must be digits (e.g. 637640), got {loc!r}"))
         if category_id is not None and not category_id.strip().isdigit():
             raise_tool_error(BadRequestError(f"category_id must be digits, got {category_id!r}"))
+        if price_min is not None and price_max is not None and price_min > price_max:
+            raise_tool_error(BadRequestError(f"price_min {price_min} is above price_max {price_max}"))
+        if sort not in _SORT:
+            raise_tool_error(BadRequestError(f"sort must be one of {sorted(_SORT)}, got {sort!r}"))
+        if seller_type not in _SELLER_TYPE:
+            raise_tool_error(BadRequestError(f"seller_type must be one of {sorted(_SELLER_TYPE)}, got {seller_type!r}"))
 
-        url = _build_search_url(query.strip(), page, loc, category_id.strip() if category_id else None)
-        status, body, tier = await _fetch(url, ctx)
-        if status != 200:
-            _raise_for_fetch_failure(status, body, tier, "search")
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise_tool_error(ParserDriftError(f"non-JSON search body via {tier}; preview: {body[:200]}"))
-        if not isinstance(payload, dict):
-            raise_tool_error(ParserDriftError("search payload is not a JSON object"))
+        extra = {
+            key: value
+            for key, value in (
+                ("pmin", None if price_min is None else str(price_min)),
+                ("pmax", None if price_max is None else str(price_max)),
+                ("s", _SORT[sort]),
+                ("d", "1" if delivery_only else None),
+                ("user", _SELLER_TYPE[seller_type]),
+            )
+            if value is not None
+        }
+        url = _search_url(text, page, loc, category_id.strip() if category_id else None, extra)
+        cached = _cache.get(url)
+        if isinstance(cached, dict):
+            payload, tier = cached, "cache"
+        else:
+            payload, tier = await _open_json(url), "cdp"
+            _cache.set(url, payload)
 
-        items_raw, total = _parse_search_items(payload)
+        rows, total = _parse_search_items(payload)
         warnings: list[str] = []
-        if not items_raw and total not in (0, None):
+        if extra:
+            warnings.append(
+                "filters_not_verified_live: Avito has not yet been seen honouring "
+                f"{', '.join(sorted(extra))} on js/items; price bounds are re-applied here"
+            )
+        if not rows and total not in (0, None):
             warnings.append("empty_items_with_nonzero_total")
-        items = [AvitoSearchItemOut(**it) for it in items_raw]
+        if price_min is not None or price_max is not None:
+            low, high = price_min or 0, price_max if price_max is not None else float("inf")
+            rows = [r for r in rows if r["price_rub"] is not None and low <= r["price_rub"] <= high]
+        if sort in ("price_asc", "price_desc"):
+            priced = sorted((r for r in rows if r["price_rub"] is not None), key=lambda r: r["price_rub"])
+            rows = (priced if sort == "price_asc" else priced[::-1]) + [r for r in rows if r["price_rub"] is None]
+        if rows and not names_query(text, [r["title"] or "" for r in rows]):
+            warnings.insert(0, f"no_match: Avito listed {len(rows)} ads, none names {text!r} — dropped as unrelated")
+            rows = []
+        items = [AvitoSearchItemOut(**row) for row in rows]
         result = AvitoSearchResponse(
-            query=query,
-            page=page,
-            location_id=loc,
-            tier_used=tier,
-            count=len(items),
-            total_count=total,
-            items=items,
+            query=text, page=page, location_id=loc, tier_used=tier, count=len(items), total_count=total, items=items
         )
-        attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), warnings, source="avito_search")
-        result.meta = MetaOut(**attached["_meta"])
+        result.meta = MetaOut(source="avito_search", healthy=not warnings, warnings=warnings)
+        log_event("avito_search.done", query=text[:60], returned=len(items))
         return result
     except ToolError:
         raise
@@ -500,7 +443,31 @@ async def avito_search(
         raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"avito_search failed: {exc}")))
+        raise_tool_error(TransportDownError(_redact(f"avito_search failed: {exc}"), provider="avito"))
+
+
+def item_page(url: str) -> tuple[str, str] | None:
+    """(item id, canonical URL) for an avito.ru item page, else None."""
+    parsed = urllib.parse.urlsplit(url)
+    match = _ITEM_PATH_RE.match(parsed.path)
+    if (
+        parsed.scheme not in ("http", "https")
+        or parsed.hostname not in _HOSTS
+        or parsed.username is not None
+        or parsed.port is not None
+        or match is None
+    ):
+        return None
+    return match.group(1), f"{SITE_BASE}{parsed.path.rstrip('/')}"
+
+
+def _first_int(raw: Any) -> int | None:
+    match = re.search(r"\d[\d\s  ]*", str(raw or ""))
+    return int(re.sub(r"\D", "", match.group(0))) if match else None
+
+
+def _card_ready(data: dict[str, Any]) -> bool:
+    return bool(data.get("title") or data.get("firewall") or data.get("captcha"))
 
 
 @mcp.tool(
@@ -510,189 +477,123 @@ async def avito_search(
     ),
 )
 async def avito_card(
-    item_id_or_url: Annotated[
-        str, Field(min_length=1, max_length=300, description="Item id, slug path or full avito.ru URL")
-    ],
+    url: Annotated[str, Field(min_length=1, max_length=400, description="Ad URL from avito_search or the site")],
     ctx: Context | None = None,
 ) -> AvitoCardResponse:
-    """Fetch one Avito listing by id or URL.
+    """Read one Avito ad page in the plugin's tab: price, description, params, seller reputation.
+
+    The seller's name is not returned. The page reader has not been checked on a live
+    page yet (the meta carries ``card_not_verified_live``).
 
     ## Return Format
 
-    AvitoCardResponse: {status, item_id, title, price_rub, description, location,
-    posted_at, views, images, seller, url, tier_used, meta}. price_rub is None
-    when the ad has no price — never 0.
+    AvitoCardResponse: {status, item_id, title, price_rub, description, params, posted,
+    views, photos, delivery, seller{is_company, rating_score, rating_count, since_year},
+    url, tier_used, meta}. price_rub is None when the ad has no price — never 0.
 
     ## Error Format
 
-    ToolError: BadRequestError when no id can be extracted; NotFoundError on a
-    404 (deleted or never existed); TransportDownError on blocks; ParserDriftError
-    when the envelope changed.
+    ToolError: bad_request for anything but an avito.ru ad URL; not_found for a removed
+    ad; challenge_required on a captcha and transport_down with source_stopped on
+    401/403/418/429, a block page or a redirect off avito.ru; parser_drift when the page
+    has no title.
     """
-    log_event("avito_card.start", input=item_id_or_url[:80])
+    log_event("avito_card.start", input=url[:80])
     try:
-        item_id = _extract_item_id(item_id_or_url)
-        if item_id is None:
+        target = item_page(url.strip())
+        if target is None:
             raise_tool_error(
-                BadRequestError(
-                    f"could not extract an item id from {item_id_or_url!r}; "
-                    "pass bare digits, a /slug_1234567890 path, or a full avito.ru URL"
-                )
+                BadRequestError(f"not an avito.ru ad page: {url[:120]!r}; pass the ad URL from avito_search")
             )
-        url = f"{ITEMS_API}?{urllib.parse.urlencode({'itemId': str(item_id)})}"
-        status, body, tier = await _fetch(url, ctx)
-        if status != 200:
-            _raise_for_fetch_failure(status, body, tier, "card")
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise_tool_error(ParserDriftError(f"non-JSON card body via {tier}; preview: {body[:200]}"))
-
-        item_raw = payload.get("item") if isinstance(payload.get("item"), dict) else payload
-        if not isinstance(item_raw, dict) or not item_raw:
-            raise_tool_error(ParserDriftError("card payload has no item object"))
-        item: dict[str, Any] = item_raw
-
-        price = R.coerce_price(R.first_present(item, "price", "priceRub"))
-        if price is None and isinstance(item.get("priceDetailed"), dict):
-            price = R.coerce_price(R.first_present(item["priceDetailed"], "value", "price"))
-        seller_field = item.get("seller")
-        seller_raw: dict[str, Any] = seller_field if isinstance(seller_field, dict) else {}
-        seller = AvitoSellerOut(
-            name=R.first_present(seller_raw, "name", "title"),
-            seller_id=str(R.first_present(seller_raw, "id", "userId", "user_id", default="") or "") or None,
-            is_company=R.first_present(seller_raw, "isCompany", "is_company"),
-            rating_score=R.coerce_rating(R.first_present(seller_raw, "rating", "ratingScore")),
-            rating_count=R.coerce_int(R.first_present(seller_raw, "ratingCount", "reviewsCount")),
-            profile_url=R.first_present(seller_raw, "profileUrl", "uri"),
-        )
-        images = item.get("images")
-        result = AvitoCardResponse(
+        item_id, page_url = target
+        cached = _cache.get(f"card:{item_id}")
+        if isinstance(cached, dict):
+            data, tier = cached, "cache"
+        else:
+            data, tier = await _open(page_url, _CARD_EXTRACT_JS, _card_ready), "cdp"
+            if data.get("captcha"):
+                _refuse("captcha", _captcha())
+            if data.get("firewall"):
+                _refuse("block page in the tab", _blocked(403, "showed «Доступ ограничен»"))
+            if not data.get("title"):
+                raise_tool_error(ParserDriftError("avito_card: the ad page has no title", provider="avito"))
+            _pacer.record_success()
+            _cache.set(f"card:{item_id}", data)
+        kind = str(data.get("seller_kind") or "").lower()
+        since = re.search(r"(?:19|20)\d\d", str(data.get("seller_since") or ""))
+        card = AvitoCardResponse(
             item_id=item_id,
-            title=R.flatten_text(R.first_present(item, "title", "name")),
-            price_rub=price,
-            description=R.first_present(item, "description", "text"),
-            location=R.flatten_text(
-                R.first_present(item, "location", "locationName", "address"),
-                "name",
-                "title",
-                "formattedAddress",
-            )
-            or R.flatten_text(item.get("geo"), "formattedAddress", "name", "title"),
-            posted_at=_posted_at(item),
-            views=R.coerce_int(R.first_present(item, "views", "viewsCount", "viewCount")),
-            images=len(images) if isinstance(images, list) else 0,
-            seller=seller if seller.name or seller.seller_id else None,
-            url=R.first_present(item, "url", "uri", "urlPath") or f"{SITE_BASE}/_/{item_id}",
+            title=data.get("title"),
+            price_rub=R.coerce_price(data.get("price")),
+            description=data.get("description"),
+            params=[str(p) for p in data.get("params") or []],
+            posted=data.get("posted"),
+            views=_first_int(data.get("views")),
+            photos=int(data.get("photos") or 0),
+            delivery=data.get("delivery") if isinstance(data.get("delivery"), bool) else None,
+            seller=AvitoCardSellerOut(
+                is_company=True if "компан" in kind else False if "частн" in kind else None,
+                rating_score=R.coerce_rating(data.get("seller_rating")),
+                rating_count=_first_int(data.get("seller_reviews")),
+                since_year=int(since.group(0)) if since else None,
+            ),
+            url=page_url,
             tier_used=tier,
         )
-        attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), [], source="avito_card")
-        result.meta = MetaOut(**attached["_meta"])
-        return result
+        warnings = ["card_not_verified_live: the ad page reader has not been checked on a live Avito page"]
+        if card.price_rub is None:
+            warnings.append("no_price: the ad page names no price")
+        card.meta = MetaOut(source="avito_card", healthy=False, warnings=warnings)
+        return card
     except ToolError:
         raise
     except ConnectorError as exc:
         raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"avito_card failed: {exc}")))
+        raise_tool_error(TransportDownError(_redact(f"avito_card failed: {exc}"), provider="avito"))
 
 
-@mcp.tool(
-    name="avito_seller",
-    annotations=ToolAnnotations(
-        title="Avito Seller Profile", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
-    ),
-)
-async def avito_seller(
-    seller_id_or_url: Annotated[
-        str, Field(min_length=1, max_length=300, description="Seller id or profile URL from a card/search hit")
-    ],
-    ctx: Context | None = None,
-) -> AvitoSellerResponse:
-    """Fetch an Avito seller profile — reputation is the review signal here.
-
-    Classifieds have no per-item review pool; the seller's rating, review count
-    and active-listing count are what a buyer checks.
-
-    ## Return Format
-
-    AvitoSellerResponse: {status, seller, active_items, tier_used, meta}.
-
-    ## Error Format
-
-    ToolError: BadRequestError on empty input; NotFoundError on 404;
-    TransportDownError on blocks; ParserDriftError on envelope drift.
-    """
-    log_event("avito_seller.start", input=seller_id_or_url[:80])
-    try:
-        raw = seller_id_or_url.strip()
-        seller_id = re.sub(r"[^0-9A-Za-z_-]", "", raw) if not raw.isdigit() else raw
-        if not seller_id:
-            raise_tool_error(BadRequestError(f"could not extract a seller id from {seller_id_or_url!r}"))
-        url = f"{ITEMS_API}?{urllib.parse.urlencode({'userId': seller_id, 'p': '1', 'updateListOnly': 'true'})}"
-        status, body, tier = await _fetch(url, ctx)
-        if status != 200:
-            _raise_for_fetch_failure(status, body, tier, "seller")
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise_tool_error(ParserDriftError(f"non-JSON seller body via {tier}; preview: {body[:200]}"))
-
-        seller_raw = payload.get("seller") if isinstance(payload.get("seller"), dict) else payload.get("user", {})
-        if not isinstance(seller_raw, dict):
-            seller_raw = {}
-        seller = AvitoSellerOut(
-            name=R.first_present(seller_raw, "name", "title"),
-            seller_id=seller_id,
-            is_company=R.first_present(seller_raw, "isCompany", "is_company"),
-            rating_score=R.coerce_rating(R.first_present(seller_raw, "rating", "ratingScore")),
-            rating_count=R.coerce_int(R.first_present(seller_raw, "ratingCount", "reviewsCount")),
-            profile_url=R.first_present(seller_raw, "profileUrl", "uri"),
-        )
-        _, total = _parse_search_items(payload)
-        warnings: list[str] = []
-        if not seller.name:
-            warnings.append("seller_identity_missing")
-        result = AvitoSellerResponse(seller=seller, active_items=total, tier_used=tier)
-        attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), warnings, source="avito_seller")
-        result.meta = MetaOut(**attached["_meta"])
-        return result
-    except ToolError:
-        raise
-    except ConnectorError as exc:
-        raise_tool_error(exc)
-    except Exception as exc:
-        log_event("avito_seller.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
-        raise_tool_error(TransportDownError(_redact(f"avito_seller failed: {exc}")))
-
-
-# CLI-only drift canary: ``marketplace-mcp doctor`` imports and calls avito_selfcheck()
-# directly. It is deliberately NOT registered as an MCP tool — selfchecks are
-# operator diagnostics, and their input/output schemas would be billed in every
-# client request.
+# CLI-only drift canary: ``marketplace-mcp doctor`` calls it directly; it is not an MCP tool.
 async def avito_selfcheck(ctx: Context | None = None) -> AvitoSelfcheckResponse:
-    """Structural drift canary for Avito (tri-state: success / drift_detected /
-    inconclusive). Runs live probes against search, card and seller endpoints.
-
-    A 403 firewall block or CDP-down is ``inconclusive`` (transport), NEVER
-    drift: from a datacenter IP that is the expected state. Only a reached-200
-    JSON body that fails the parse smoke is ``drift``.
-
-    ## Return Format
-
-    AvitoSelfcheckResponse: {status, healthy, connector, checks, server_version,
-    server_started_at, process_id}.
-
-    ## Error Format
-
-    Raises ToolError (TransportDownError) ONLY on an unexpected internal bug
-    that prevents the canary from producing any verdict. Transport/block
-    failures of individual sub-checks map to inconclusive entries, not errors.
-    """
+    """Drift canary: one search through the tab. A refusal is inconclusive; only a reached answer that fails to parse is drift."""
     log_event("avito_selfcheck.start")
     try:
-        result = await _avito_selfcheck_impl(ctx)
+        checks: dict[str, dict] = {}
+        try:
+            async with asyncio.timeout(60):
+                url = _search_url(_settings.selfcheck_query, 1, _settings.location_id, None, {})
+                payload = await _open_json(url)
+            items, _ = _parse_search_items(payload)
+            missing = missing_required_families(R.shape_signature(payload))
+            if not items or missing:
+                lost = "; ".join("/".join(family) for family in missing) or "no items parsed"
+                checks["search"] = R.selfcheck_entry(
+                    "drift", baseline="js-items-search-v1", reason="parse_smoke_failed", notes=[lost[:160]]
+                )
+            else:
+                checks["search"] = R.selfcheck_entry(
+                    "healthy", baseline="js-items-search-v1", notes=[f"{len(items)} items parsed"]
+                )
+        except ToolError as exc:
+            try:
+                code = json.loads(str(exc)).get("error")
+            except (ValueError, AttributeError):
+                code = None
+            state, reason = ("drift", "parse_smoke_failed") if code == "parser_drift" else ("inconclusive", code)
+            checks["search"] = R.selfcheck_entry(
+                state, baseline="js-items-search-v1", reason=reason or "transport_down", notes=[str(exc)[:160]]
+            )
+        result = AvitoSelfcheckResponse(
+            **R.selfcheck_result(
+                "avito",
+                checks,
+                required=("search",),
+                server_version=SERVER_VERSION,
+                server_started_at=SERVER_STARTED_AT,
+                process_id=None,
+            )
+        )
         log_event("avito_selfcheck.done", status=result.status)
         return result
     except ToolError:
@@ -704,105 +605,4 @@ async def avito_selfcheck(ctx: Context | None = None) -> AvitoSelfcheckResponse:
         raise_tool_error(TransportDownError(_redact(f"avito_selfcheck failed: {exc}")))
 
 
-async def _avito_selfcheck_impl(ctx: Context | None) -> AvitoSelfcheckResponse:
-    checks: dict[str, dict] = {}
-
-    async def _check(name: str, url: str, smoke: Any, baseline: str) -> None:
-        try:
-            async with asyncio.timeout(60):
-                status, body, tier = await _fetch(url, ctx)
-        except TimeoutError:
-            checks[name] = R.selfcheck_entry(
-                "inconclusive", baseline=baseline, reason="timeout", notes=["fetch exceeded 60s"]
-            )
-            return
-        except Exception as exc:
-            checks[name] = R.selfcheck_entry(
-                "inconclusive",
-                baseline=baseline,
-                reason="transport_down",
-                notes=[f"raised {type(exc).__name__}: {str(exc)[:120]}"],
-            )
-            return
-        if status != 200:
-            reason = "rate_limited" if status == 429 else ("blocked" if status in (401, 403, 407) else "transport_down")
-            checks[name] = R.selfcheck_entry(
-                "inconclusive", baseline=baseline, reason=reason, notes=[f"http {status} via {tier}"], code=status
-            )
-            return
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            checks[name] = R.selfcheck_entry(
-                "inconclusive", baseline=baseline, reason="transport_down", notes=["body not JSON (firewall page?)"]
-            )
-            return
-        try:
-            verdict = smoke(payload)
-        except Exception as exc:
-            checks[name] = R.selfcheck_entry(
-                "drift", baseline=baseline, reason="parse_smoke_failed", notes=[str(exc)[:160]]
-            )
-            return
-        checks[name] = R.selfcheck_entry("healthy", baseline=baseline, notes=[verdict or "ok"])
-
-    def _search_smoke(payload: Any) -> str:
-        if not isinstance(payload, dict):
-            raise ValueError("payload not an object")
-        items, _ = _parse_search_items(payload)
-        if not items:
-            raise ValueError("no items parsed from a generic query")
-        first = items[0]
-        if first["item_id"] is None and first["title"] is None:
-            raise ValueError("items carry neither id nor title")
-        # The parser binds through alias families, so a rename WITHIN a family
-        # is fine — but the loss of a whole family is drift the parse smoke
-        # cannot see (id renamed away while title survives would serve every
-        # item without an id). Compare against the captured reference.
-        missing = missing_required_families(R.shape_signature(payload))
-        if missing:
-            lost = "; ".join("/".join(family) for family in missing)
-            raise ValueError(f"payload lost parser-critical key families: {lost}")
-        return f"{len(items)} items parsed"
-
-    def _card_smoke(payload: Any) -> str:
-        item = payload.get("item") if isinstance(payload, dict) and isinstance(payload.get("item"), dict) else payload
-        if not isinstance(item, dict) or not item:
-            raise ValueError("no item object")
-        if R.first_present(item, "title", "name") is None:
-            raise ValueError("item has no title")
-        return "card envelope intact"
-
-    def _seller_smoke(payload: Any) -> str:
-        if not isinstance(payload, dict):
-            raise ValueError("payload not an object")
-        return "seller envelope intact"
-
-    await _check(
-        "search",
-        _build_search_url("ноутбук", 1, _settings.location_id, None),
-        _search_smoke,
-        "js-items-search-v1",
-    )
-    await _check(
-        "seller",
-        f"{ITEMS_API}?{urllib.parse.urlencode({'userId': '1', 'p': '1', 'updateListOnly': 'true'})}",
-        _seller_smoke,
-        "js-items-seller-v1",
-    )
-
-    result_dict = R.selfcheck_result(
-        "avito",
-        checks,
-        required=("search", "seller"),
-        server_version=SERVER_VERSION,
-        server_started_at=SERVER_STARTED_AT,
-        process_id=None,
-    )
-    return AvitoSelfcheckResponse(**result_dict)
-
-
-# Advertised output schemas are the dominant constant cost of an MCP mount:
-# replace the full Pydantic tree with top-level field names (~64 % fewer
-# wire tokens on the unified server).
 apply_compact_output_schemas(mcp)

@@ -1123,7 +1123,6 @@ async def test_avito_adapter_maps_classified_fields(monkeypatch):
                         title="Ноутбук ThinkPad",
                         price_rub=45500.0,
                         url="https://www.avito.ru/moskva/noutbuki/x_4612345678",
-                        seller_name="ИП Сидоров",
                     ),
                     AvitoSearchItemOut(item_id=4612349999, title="Отдам даром", price_rub=None, url=""),
                 ]
@@ -1134,7 +1133,7 @@ async def test_avito_adapter_maps_classified_fields(monkeypatch):
     got = await server._search_avito("ноутбук", 10)
 
     assert got[0].price_rub == 45500.0
-    assert got[0].seller == "ИП Сидоров"
+    assert got[0].seller == "", "an Avito seller's name is personal data and never leaves the connector"
     assert got[1].price_rub is None, "a priceless ad stays priceless — never 0"
 
 

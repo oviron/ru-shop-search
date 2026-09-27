@@ -26,7 +26,7 @@ inside a real browser.
 | Yandex Market | ✅ поиск и `/card/` | SmartCaptcha: `/product/<id>` сразу даёт капчу | ✅ `curl_cffi` |
 | Detsky Mir | ⚠️ с домашнего ✅, с хостинга 418 | DDoS-Guard: 418 по адресу | ✅ `curl_cffi` |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
-| Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
+| Avito | ❌ 403 firewall; с домашнего 429 (2026-09-27) | репутация IP и темп, капча файрвола | ⚠️ вкладка профиля, вживую не проверено |
 | Lamoda | ❌ ServicePipe; с домашнего ✅ | ServicePipe: отказ по адресу | ✅ `curl_cffi` |
 | DNS | ❌ 401 | Qrator JS proof-of-work | ✅ via your Chrome |
 | Citilink | ❌ 429 | Qrator: JS-проверка на 429, вкладка проходит сама | ✅ вкладка профиля |
@@ -434,22 +434,11 @@ The API itself is well documented by open-source parsers (Duff89/parser_avito):
 the site renders. Those parsers survive on mobile proxies and bought cookies —
 the firewall is the whole problem.
 
-**Verdict:** tier 2. From a residential Russian IP with a warmed-up session the
-`js/items` endpoint answers; from your logged-in Chrome it always does. The
-connector tries tier 1 (impersonated HTTPS) first and falls back to CDP, same
-as Ozon — but expect tier 1 to be dead from any datacenter.
-
-The July 2026 run confirmed the endpoint is right and the block is the whole
-problem. Even from the residential IP, search came back with an HTTP 439/429-class
-refusal — an IP/rate block, not a challenge that a browser clears. The seller
-endpoint answered while search did not, which is the rate limiter biting the
-heavier query first. Three public parsers — `Duff89/parser_avito`,
-`ihydrad/avito-parser`, `ergon73/avito-parser` — all drive the same `js/items`
-endpoint this connector uses, and their code and issue trackers are dominated by
-cookie handling and HTTP 429; Duff89 has an open issue reporting 429 even behind
-a server proxy. Nobody has a cleaner path. IP reputation and request rate are the
-blocker, so this one wants a residential or mobile IP and patience on top of the
-browser.
+**Verdict (upstream, July 2026):** the endpoint is right and the block is the whole
+problem. Even from a residential IP search came back 429-class, and the public parsers
+that drive the same `js/items` endpoint (`Duff89/parser_avito`, `ihydrad/avito-parser`,
+`ergon73/avito-parser`) are dominated by cookie handling and HTTP 429. What the plugin
+does today is in [the Avito section below](#авито--одна-навигация-стоп-на-первом-отказе).
 
 ## Sources that needed the CDP tier
 
@@ -719,3 +708,37 @@ work.
   401/403/418/429, уход вкладки с `pepper.ru` и страница без «Pepper» в заголовке и без
   сделок — тоже стоп. 404 карточки — `not_found` без стопа, прочие сбои —
   `transport_down` без стопа.
+
+## Авито — одна навигация, стоп на первом отказе
+
+Домашний IP получил флаг Авито ещё до плагина. Единственный проверочный запрос шага 7
+(2026-09-27 23:14:20, вкладка профиля на выдачу `/moskva?q=rtx+5070`) ответил 429, так
+что всё ниже проверено только офлайн.
+
+- **Транспорт один: вкладка профиля.** HTTP-уровень через `curl_cffi`, `fetch` из
+  прогретой вкладки и `RetryMiddleware` убраны: каждый из них после отказа делал второй
+  запрос, а Авито банит именно за темп. Пауза между запросами — 5 с.
+- **Поиск** открывает `/web/1/js/items?q=…&p=…&locationId=…` прямо во вкладке как
+  документ, одной навигацией; JSON — это текст страницы (`body > pre` у Chrome). Разбор
+  проверен на настоящем ответе `js/items` от 2026-08-29: объявления в `catalog.items[]`,
+  цена в `priceDetailed.value`, ссылка в `urlPath`, рейтинг продавца в `rating`
+  («721 отзыв»). Как Авито отвечает на открытие API документом, а не из скрипта
+  страницы, не проверено.
+- **Фильтры** уходят параметрами сайта: `pmin`, `pmax`, `s` (1 — дешевле, 2 — дороже,
+  104 — по дате), `d=1` (с доставкой), `user=1|2` (частные или компании). Принимает ли их
+  `js/items`, не проверено, поэтому границы цены и сортировку по цене коннектор
+  применяет к ответу ещё раз сам и пишет `filters_not_verified_live`.
+- **Карточка** — страница объявления, данные по `data-marker`
+  (`item-view/title-info`, `item-view/item-price`, `item-view/item-params`,
+  `item-view/item-description`, `seller-info/*`). Читатель проверен только на
+  синтетической странице, отсюда предупреждение `card_not_verified_live`.
+- **Имя продавца** не выходит ни из выдачи, ни из карточки: у частника это персональные
+  данные. Остаются рейтинг, число отзывов, «компания или частное лицо» и год «На Авито с».
+- **Отказы.** 401/403/418/429, уход вкладки с `avito.ru`, JSON без объявлений с
+  `firewall` или `too-many-requests`, страница вместо JSON, «Доступ ограничен» и капча на
+  странице объявления — стоп на 30 минут, без второго запроса. 404 карточки —
+  `not_found` без стопа; пустой или обрезанный ответ и прочие сбои — `transport_down`
+  без стопа.
+- **`avito_evaluate`** не ходит в Авито повторно, если карточка уже вернула стоп: лот и
+  цены похожих объявлений тогда можно передать аргументами.
+

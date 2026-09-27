@@ -595,12 +595,7 @@ async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
 
 
 async def _search_avito(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``avito_search`` results.
-
-    Avito is classifieds: no brand, no star rating on listings — seller
-    reputation lives behind avito_seller, not on a search row. price_rub is
-    already a float (None for priceless ads) from the connector itself.
-    """
+    """Adapt ``avito_search`` results: classifieds, no brand or item rating; priceless ads stay None."""
     server = SOURCES["avito"]
     response = await server.avito_search(query=query, page=1)
 
@@ -612,7 +607,7 @@ async def _search_avito(query: str, limit: int) -> list[MarketOffer]:
                 product_id=str(item.item_id or ""),
                 title=item.title or "",
                 brand="",
-                seller=item.seller_name or "",
+                seller="",
                 price_rub=item.price_rub,
                 rating=None,
                 rating_count=None,
@@ -1284,7 +1279,7 @@ async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool
     else:
         argument = {
             "ozon": "sku_or_path",
-            "avito": "item_id_or_url",
+            "avito": "url",
             "lamoda": "sku_or_url",
             "dns": "product_url",
             "citilink": "product_url",

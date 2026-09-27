@@ -12,7 +12,7 @@ from mcp_core.stopgate import default_gate
 async def test_only_plugin_tools_are_exposed():
     names = {tool.name for tool in await server.mcp.list_tools()}
 
-    assert names == {"search", "card", "shops"}
+    assert names == {"search", "card", "shops", "avito_evaluate"}
 
 
 async def test_search_delegates_to_the_fan_out(monkeypatch):

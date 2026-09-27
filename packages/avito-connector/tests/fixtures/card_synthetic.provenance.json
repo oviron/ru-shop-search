@@ -1,0 +1,9 @@
+{
+  "url": "https://www.avito.ru/moskva/telefony/iphone_13_128_gb_1234567890",
+  "captured_at": null,
+  "sha256": "bad547620dbd5a14aaede6a181942185f614b0158b18fa97c3d7affc3f532681",
+  "method": "synthetic: written by hand on 2026-09-27, not captured. Avito refused the home IP (HTTP 429 on the one check request, 2026-09-27 23:14:21), so no live item page exists to capture. The data-marker names follow the ones public Avito parsers read (item-view/title-info, item-view/item-price, item-view/item-params, item-view/item-description, item-view/item-date, item-view/total-views, seller-info/*); image-preview/item, delivery-item-button, seller-info/label, seller-info/score, seller-info/summary and seller-info/registered are guesses. Text values are invented; there is no seller name and no personal data.",
+  "ground_truth": {
+    "note": "the card extractor must read: title «iPhone 13 128 ГБ», price 52000, 3 params, 4 photos, delivery button, private seller 4,9 / 37 отзывов / since 2019, views «1 204 просмотра»"
+  }
+}

@@ -1,431 +1,427 @@
-"""Offline tests for the Avito connector.
-
-Every upstream call is monkeypatched, so the suite runs with no network and no
-geo dependency. Fixtures mirror the js/items envelope shape documented by
-third-party parsers and probed in July 2026 — including the failure modes that
-make this endpoint easy to parse wrongly (a 403 that looks like content, a
-listing with no price).
-"""
+"""Avito through a faked Chrome tab: one navigation per call, the first refusal stops Avito, no second try."""
 
 from __future__ import annotations
 
+import html
 import json
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from avito_connector import server
 from fastmcp.exceptions import ToolError
+from fastmcp.server.middleware.error_handling import RetryMiddleware
+from mcp_core.domtest import JsdomUnavailable, run_extractor
+from mcp_core.pacing import Pacer
+from mcp_core.stopgate import StopGate
+from mcp_core.transport.chrome_cdp import NavBlocked, NavigationPolicyError
 
-# ---------------------------------------------------------------- fixtures ----
-
-SEARCH_PAYLOAD = {
-    "totalCount": 137,
-    "items": [
-        {
-            "id": 4612345678,
-            "title": "Ноутбук ThinkPad X1 Carbon",
-            "price": 45500,
-            "uri": "/moskva/noutbuki/noutbuk_thinkpad_x1_carbon_4612345678",
-            "location": "Москва",
-            "seller": {"name": "ИП Сидоров", "id": 987654, "isCompany": True},
-            "date": "сегодня, 12:40",
-            "images": [{"url": "https://img.avito.st/1.jpg"}, {"url": "https://img.avito.st/2.jpg"}],
-        },
-        {
-            "id": 4612349999,
-            "title": "Отдам даром клавиатуру",
-            "uri": "/moskva/klaviatury/klaviatura_4612349999",
-            "location": "Москва",
-            "seller": {"name": "Анна"},
-            "images": [],
-        },
-    ],
+FIXTURES = Path(__file__).parent / "fixtures"
+LIVE_JSON = (FIXTURES / "js_items_live.json").read_text(encoding="utf-8")
+HOSTS = frozenset({"avito.ru", "www.avito.ru"})
+CARD_URL = "https://www.avito.ru/moskva/telefony/iphone_13_128_gb_1234567890"
+CARD = {
+    "page_title": "iPhone 13 128 ГБ купить в Москве | Авито",
+    "firewall": False,
+    "captcha": False,
+    "title": "iPhone 13 128 ГБ",
+    "price": "52000",
+    "description": "Телефон в хорошем состоянии, царапины на рамке.",
+    "params": ["Состояние: Б/у", "Встроенная память: 128 ГБ", "Цвет: синий"],
+    "posted": "· 21 сентября в 14:02",
+    "views": "1 204 просмотра",
+    "photos": 4,
+    "delivery": True,
+    "seller_kind": "Частное лицо",
+    "seller_rating": "4,9",
+    "seller_reviews": "37 отзывов",
+    "seller_since": "На Авито с марта 2019",
 }
-
-CARD_PAYLOAD = {
-    "item": {
-        "id": 4612345678,
-        "title": "Ноутбук ThinkPad X1 Carbon",
-        "price": 45500,
-        "description": "В хорошем состоянии, батарея держит 6 часов.",
-        "location": "Москва, р-н Хамовники",
-        "date": "сегодня, 12:40",
-        "views": 231,
-        "images": [{"url": "https://img.avito.st/1.jpg"}],
-        "seller": {
-            "name": "ИП Сидоров",
-            "id": 987654,
-            "isCompany": True,
-            "ratingScore": 4.8,
-            "ratingCount": 152,
-            "profileUrl": "/user/987654/profile",
-        },
-        "uri": "/moskva/noutbuki/noutbuk_thinkpad_x1_carbon_4612345678",
-    }
-}
-
-SELLER_PAYLOAD = {
-    "totalCount": 12,
-    "seller": {
-        "name": "ИП Сидоров",
-        "isCompany": True,
-        "ratingScore": 4.8,
-        "ratingCount": 152,
-        "profileUrl": "/user/987654/profile",
-    },
-    "items": [],
-}
-
-FIREWALL_BODY = '{"too-many-requests":{"link":"ru.avito://1/firewall/captcha/show","message":"Доступ с вашего IP-адреса временно ограничен"}}'
+FIREWALL_CARD = {**CARD, "title": None, "firewall": True, "page_title": "Доступ ограничен"}
 
 
-def _ok(payload: dict):
-    return 200, json.dumps(payload, ensure_ascii=False), "curl_cffi"
+def json_doc(text: str, title: str = "") -> dict:
+    return {"page_title": title, "size": len(text), "text": text}
 
 
 @pytest.fixture(autouse=True)
-def _no_cache(monkeypatch):
-    """Every test starts with an empty cache: a cached body from a previous
-    case would otherwise shadow its monkeypatched fetch."""
-    server._cache._data.clear()
+def fresh_state(monkeypatch):
+    server._cache.clear()
+    monkeypatch.setattr(server, "_pacer", Pacer(0.0, source="avito", gate=StopGate(None)))
+    monkeypatch.setattr(server, "_min_gap", 0.0)
+    monkeypatch.setattr(server, "_POLL_S", 0.0)
+    monkeypatch.setattr(server, "_RENDER_WAIT_S", 0.0)
+    yield
+    server._cache.clear()
 
 
-def _patch_fetch(monkeypatch, result):
-    async def fake_fetch(url, ctx):
-        return result
-
-    monkeypatch.setattr(server, "_fetch", fake_fetch)
+def error_payload(err: ToolError) -> dict:
+    return json.loads(str(err))
 
 
-# --------------------------------------------------------------- avito_search ----
+class FakePage:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def evaluate(self, expression, arg=None):
+        return json.dumps(self.payload, ensure_ascii=False)
 
 
-async def test_search_parses_items_and_total(monkeypatch):
-    _patch_fetch(monkeypatch, _ok(SEARCH_PAYLOAD))
+def fake_tab(monkeypatch, *outcomes) -> list[dict]:
+    """Each outcome is a payload the tab returns, or an exception raised on navigation."""
+    calls: list[dict] = []
+    queue = list(outcomes)
 
-    result = await server.avito_search("thinkpad", page=1)
+    @asynccontextmanager
+    async def open_page(url, wait_ms=5000, **kwargs):
+        calls.append({"url": url, **kwargs})
+        outcome = queue.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        yield FakePage(outcome)
 
-    assert result.status == "success"
-    assert result.count == 2
-    assert result.total_count == 137
-    first = result.items[0]
-    assert first.item_id == 4612345678
-    assert first.price_rub == 45500
-    assert first.url == "https://www.avito.ru/moskva/noutbuki/noutbuk_thinkpad_x1_carbon_4612345678"
-    assert first.seller_name == "ИП Сидоров"
-    assert first.images == 2
-
-
-async def test_search_a_pricelss_listing_is_none_never_zero(monkeypatch):
-    """The free keyboard carries no price field at all; it must surface as None,
-    because a 0 would rank it cheapest in compare_prices."""
-    _patch_fetch(monkeypatch, _ok(SEARCH_PAYLOAD))
-
-    result = await server.avito_search("клавиатура")
-
-    priceless = result.items[1]
-    assert priceless.price_rub is None
-    assert priceless.price_rub != 0
+    monkeypatch.setattr(server, "open_page", open_page)
+    return calls
 
 
-@pytest.mark.parametrize("bad_loc", ["", "moscow", "63 7640", "637640;rm -rf", "1"])
-async def test_search_rejects_a_malformed_location_id(bad_loc):
-    """Отказ должен быть по разбору аргумента, а не по неудачному запросу.
-
-    Пустая строка раньше падала на дефолт 637640, уходила в сеть и зеленила
-    тест на транспортной ошибке — то есть проверка проходила, не проверив
-    ничего. Ошибка обязана быть bad_request, и до сети дойти не должно.
-    """
-    with pytest.raises(ToolError) as excinfo:
-        await server.avito_search("ноутбук", location_id=bad_loc)
-    assert "bad_request" in str(excinfo.value), f"ожидался отказ по валидации, получено: {excinfo.value}"
+# ------------------------------------------------------------ transport ----
 
 
-async def test_search_rejects_a_non_digit_category_id():
-    with pytest.raises(ToolError):
-        await server.avito_search("ноутбук", category_id="electronics")
+def test_there_is_no_retry_middleware_and_no_http_tier():
+    assert not any(isinstance(m, RetryMiddleware) for m in server.mcp.middleware)
+    assert not hasattr(server, "_sync_curl_get")
 
 
-async def test_search_maps_a_firewall_block_to_transport_down(monkeypatch):
-    _patch_fetch(monkeypatch, (403, FIREWALL_BODY, "cdp"))
+async def test_search_opens_js_items_once_and_parses_the_live_payload(monkeypatch):
+    calls = fake_tab(monkeypatch, json_doc(LIVE_JSON))
 
-    with pytest.raises(ToolError) as excinfo:
-        await server.avito_search("ноутбук")
+    result = await server.avito_search("ноутбук")
 
-    assert "firewall" in str(excinfo.value).lower() or "block" in str(excinfo.value).lower()
+    assert calls == [
+        {
+            "url": "https://www.avito.ru/web/1/js/items?q=%D0%BD%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA&p=1"
+            "&locationId=637640&context=&updateListOnly=true",
+            "allowed_hosts": HOSTS,
+        }
+    ]
+    assert [item.price_rub for item in result.items] == [69900.0, 17990.0, 14000.0]
+    assert result.items[0].title == "Ноутбук Lenovo ThinkBook 16 G6 Новый"
+    assert (result.items[0].seller_rating, result.items[0].seller_reviews) == (5.0, 721)
+    assert result.items[0].category_id == 98
+    assert (result.tier_used, result.meta.warnings) == ("cdp", [])
 
 
-async def test_search_maps_non_json_to_parser_drift(monkeypatch):
-    """A 200 carrying the HTML block page instead of JSON is drift, not success."""
-    _patch_fetch(monkeypatch, (200, "<html><body>Доступ ограничен</body></html>", "cdp"))
+async def test_a_repeated_search_is_served_from_cache(monkeypatch):
+    calls = fake_tab(monkeypatch, json_doc(LIVE_JSON))
 
-    with pytest.raises(ToolError):
-        await server.avito_search("ноутбук")
+    await server.avito_search("ноутбук")
+    again = await server.avito_search("ноутбук")
+
+    assert (len(calls), again.tier_used) == (1, "cache")
 
 
-async def test_search_warns_on_empty_items_with_nonzero_total(monkeypatch):
-    payload = {"totalCount": 41, "items": []}
-    _patch_fetch(monkeypatch, _ok(payload))
+async def test_filters_go_into_the_url_and_price_bounds_are_reapplied(monkeypatch):
+    calls = fake_tab(monkeypatch, json_doc(LIVE_JSON))
 
-    result = await server.avito_search("редкая вещь")
+    result = await server.avito_search(
+        "ноутбук", price_min=15000, price_max=70000, sort="price_asc", delivery_only=True, seller_type="private"
+    )
 
-    assert result.count == 0
-    assert result.meta.healthy is False
+    url = calls[0]["url"]
+    for part in ("pmin=15000", "pmax=70000", "s=1", "d=1", "user=1"):
+        assert part in url.split("?")[1].split("&")
+    assert [item.price_rub for item in result.items] == [17990.0, 69900.0]
+    assert any(w.startswith("filters_not_verified_live") for w in result.meta.warnings)
+
+
+@pytest.mark.parametrize(("sort", "code"), [("price_desc", "2"), ("date", "104")])
+async def test_sort_codes(monkeypatch, sort, code):
+    calls = fake_tab(monkeypatch, json_doc(LIVE_JSON))
+
+    await server.avito_search("ноутбук", sort=sort)
+
+    assert f"s={code}" in calls[0]["url"]
+
+
+async def test_a_page_without_a_matching_title_is_dropped_as_no_match(monkeypatch):
+    fake_tab(monkeypatch, json_doc(LIVE_JSON))
+
+    result = await server.avito_search("холодильник")
+
+    assert result.items == []
+    assert result.meta.warnings[0].startswith("no_match")
+
+
+async def test_an_empty_page_with_a_nonzero_total_is_warned(monkeypatch):
+    fake_tab(monkeypatch, json_doc(json.dumps({"catalog": {"items": []}, "totalCount": 12})))
+
+    result = await server.avito_search("ноутбук")
+
     assert "empty_items_with_nonzero_total" in result.meta.warnings
 
 
-# ----------------------------------------------------------------- avito_card ----
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        NavBlocked(401, "https://www.avito.ru/web/1/js/items"),
+        NavBlocked(403, "https://www.avito.ru/web/1/js/items"),
+        NavBlocked(418, "https://www.avito.ru/web/1/js/items"),
+        NavBlocked(429, "https://www.avito.ru/web/1/js/items"),
+        NavigationPolicyError("https://www.avito.ru.evil/", HOSTS),
+        json_doc("Доступ ограничен: проблема с IP", title="Доступ ограничен"),
+        json_doc('{"firewall": {"captcha": true}}'),
+        json_doc('{"status": "too-many-requests"}'),
+    ],
+    ids=["401", "403", "418", "429", "off-site", "block-page", "firewall-json", "too-many"],
+)
+async def test_the_first_refusal_stops_avito_without_a_second_request(monkeypatch, outcome):
+    calls = fake_tab(monkeypatch, outcome, json_doc(LIVE_JSON))
+
+    with pytest.raises(ToolError) as first:
+        await server.avito_search("ноутбук")
+    with pytest.raises(ToolError) as second:
+        await server.avito_search("ноутбук б/у")
+
+    assert error_payload(first.value)["error"] in {"transport_down", "challenge_required", "rate_limited"}
+    assert error_payload(second.value)["source_stopped"] is True
+    assert len(calls) == 1
 
 
-async def test_card_parses_the_item_envelope(monkeypatch):
-    _patch_fetch(monkeypatch, _ok(CARD_PAYLOAD))
+async def test_a_server_error_is_transport_down_not_a_stop(monkeypatch):
+    calls = fake_tab(monkeypatch, NavBlocked(502, "https://www.avito.ru/web/1/js/items"), json_doc(LIVE_JSON))
 
-    result = await server.avito_card("4612345678")
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_search("ноутбук")
 
-    assert result.item_id == 4612345678
-    assert result.price_rub == 45500
-    assert result.views == 231
-    assert result.seller is not None
-    assert result.seller.rating_score == 4.8
-    assert result.seller.is_company is True
+    assert error_payload(excinfo.value)["error"] == "transport_down"
+    assert (await server.avito_search("ноутбук")).count == 3
+    assert len(calls) == 2
 
 
-async def test_card_accepts_a_slug_url(monkeypatch):
-    _patch_fetch(monkeypatch, _ok(CARD_PAYLOAD))
+async def test_an_oversized_body_is_transport_down(monkeypatch):
+    monkeypatch.setattr(server, "MAX_BODY_CHARS", 100)
+    fake_tab(monkeypatch, {"page_title": "", "size": 101, "text": ""})
 
-    result = await server.avito_card("https://www.avito.ru/moskva/noutbuki/noutbuk_thinkpad_x1_carbon_4612345678")
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_search("ноутбук")
 
-    assert result.item_id == 4612345678
+    assert error_payload(excinfo.value)["error"] == "transport_down"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [json_doc(""), json_doc('{"catalog": {"items": [{"id": 1, "title": "Ноу')],
+    ids=["empty", "truncated"],
+)
+async def test_an_unfinished_answer_is_transport_down_not_a_stop(monkeypatch, outcome):
+    calls = fake_tab(monkeypatch, outcome, json_doc(LIVE_JSON))
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_search("ноутбук")
+
+    assert error_payload(excinfo.value)["error"] == "transport_down"
+    assert (await server.avito_search("ноутбук")).count == 3
+    assert len(calls) == 2
+
+
+async def test_a_listing_that_mentions_a_firewall_is_not_a_refusal(monkeypatch):
+    payload = json.loads(LIVE_JSON)
+    payload = {"catalog": payload["catalog"], "totalCount": 3}
+    payload["catalog"]["items"][0]["title"] = "Ноутбук с firewall и too-many-requests в названии"
+    fake_tab(monkeypatch, json_doc(json.dumps(payload, ensure_ascii=False)))
+
+    result = await server.avito_search("ноутбук")
+
+    assert result.count == 3
+
+
+async def test_search_rows_never_carry_a_seller_name(monkeypatch):
+    payload = json.loads(LIVE_JSON)
+    payload["catalog"]["items"][0]["seller"] = {"name": "Продавец Тестовый", "id": 42, "isCompany": False}
+    fake_tab(monkeypatch, json_doc(json.dumps(payload, ensure_ascii=False)))
+
+    result = await server.avito_search("ноутбук")
+
+    row = result.items[0].model_dump()
+    assert "seller_name" not in row and "seller_id" not in row
+    assert "Продавец Тестовый" not in json.dumps(result.model_dump(), ensure_ascii=False)
+    assert row["is_company"] is False
+
+
+async def test_json_that_is_not_an_object_is_parser_drift(monkeypatch):
+    fake_tab(monkeypatch, json_doc("[1, 2]"))
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_search("ноутбук")
+
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"location_id": "moscow"}, "location_id"),
+        ({"category_id": "phones"}, "category_id"),
+        ({"price_min": 5000, "price_max": 1000}, "price_min"),
+        ({"sort": "cheapest"}, "sort"),
+        ({"seller_type": "shop"}, "seller_type"),
+    ],
+)
+async def test_search_rejects_bad_arguments_before_any_request(monkeypatch, kwargs, match):
+    calls = fake_tab(monkeypatch)
+
+    with pytest.raises(ToolError, match=match):
+        await server.avito_search("ноутбук", **kwargs)
+    assert calls == []
+
+
+def test_the_json_reader_takes_the_text_of_chrome_s_json_document(tmp_path):
+    page = tmp_path / "js_items.html"
+    page.write_text(f"<html><head></head><body><pre>{html.escape(LIVE_JSON)}</pre></body></html>", encoding="utf-8")
+    try:
+        raw = run_extractor(server._JSON_READ_JS, page.resolve(), page_url="https://www.avito.ru/web/1/js/items?q=x")
+    except JsdomUnavailable as exc:
+        pytest.skip(str(exc))
+
+    payload = raw if isinstance(raw, dict) else json.loads(raw)
+    assert json.loads(payload["text"]) == json.loads(LIVE_JSON)
+    assert payload["size"] == len(payload["text"])
+
+
+# ----------------------------------------------------------------- card ----
+
+
+async def test_card_reads_the_item_page(monkeypatch):
+    calls = fake_tab(monkeypatch, CARD)
+
+    card = await server.avito_card(CARD_URL + "?context=abc")
+
+    assert calls == [{"url": CARD_URL, "allowed_hosts": HOSTS}]
+    assert (card.item_id, card.title, card.price_rub, card.photos, card.delivery) == (
+        "1234567890",
+        "iPhone 13 128 ГБ",
+        52000.0,
+        4,
+        True,
+    )
+    assert card.params == ["Состояние: Б/у", "Встроенная память: 128 ГБ", "Цвет: синий"]
+    assert card.views == 1204
+    assert (card.seller.is_company, card.seller.rating_score, card.seller.rating_count, card.seller.since_year) == (
+        False,
+        4.9,
+        37,
+        2019,
+    )
+    assert card.meta.warnings[0].startswith("card_not_verified_live")
 
 
 @pytest.mark.parametrize(
     "bad",
-    ["", "not-an-item", "https://example.com/1234567890", "123", "avito.ru/moskva"],
+    [
+        "1234567890",
+        "https://www.avito.ru/moskva/telefony",
+        "https://evil.example/moskva/telefony/iphone_1234567890",
+        "https://user@www.avito.ru/moskva/telefony/iphone_1234567890",
+        "ftp://www.avito.ru/moskva/telefony/iphone_1234567890",
+    ],
 )
-async def test_card_rejects_input_without_an_item_id(bad):
-    with pytest.raises(ToolError):
+async def test_card_takes_only_an_avito_item_url(monkeypatch, bad):
+    calls = fake_tab(monkeypatch)
+
+    with pytest.raises(ToolError, match="bad_request"):
         await server.avito_card(bad)
+    assert calls == []
 
 
-async def test_card_maps_404_to_not_found(monkeypatch):
-    _patch_fetch(monkeypatch, (404, "{}", "curl_cffi"))
+async def test_a_missing_item_is_not_found_not_a_stop(monkeypatch):
+    fake_tab(monkeypatch, NavBlocked(404, CARD_URL), CARD)
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_card(CARD_URL)
+
+    assert error_payload(excinfo.value)["error"] == "not_found"
+    assert (await server.avito_card(CARD_URL)).title == "iPhone 13 128 ГБ"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [NavBlocked(429, CARD_URL), FIREWALL_CARD, {**CARD, "title": None, "captcha": True}],
+    ids=["429", "firewall", "captcha"],
+)
+async def test_a_refused_card_stops_avito(monkeypatch, outcome):
+    calls = fake_tab(monkeypatch, outcome, CARD)
 
     with pytest.raises(ToolError):
-        await server.avito_card("4612345678")
+        await server.avito_card(CARD_URL)
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_card(CARD_URL)
+
+    assert error_payload(excinfo.value)["source_stopped"] is True
+    assert len(calls) == 1
 
 
-# --------------------------------------------------------------- avito_seller ----
+async def test_a_card_page_without_a_title_is_drift(monkeypatch):
+    fake_tab(monkeypatch, {**CARD, "title": None, "price": None})
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.avito_card(CARD_URL)
+
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
 
 
-async def test_seller_parses_reputation_and_active_count(monkeypatch):
-    _patch_fetch(monkeypatch, _ok(SELLER_PAYLOAD))
+def test_the_card_extractor_on_the_synthetic_page():
+    try:
+        payload = run_extractor(
+            server._CARD_EXTRACT_JS, (FIXTURES / "card_synthetic.html").resolve(), page_url=CARD_URL
+        )
+    except JsdomUnavailable as exc:
+        pytest.skip(str(exc))
 
-    result = await server.avito_seller("987654")
-
-    assert result.seller is not None
-    assert result.seller.rating_score == 4.8
-    assert result.seller.rating_count == 152
-    assert result.active_items == 12
-
-
-async def test_seller_warns_when_identity_is_missing(monkeypatch):
-    _patch_fetch(monkeypatch, _ok({"totalCount": 3, "items": []}))
-
-    result = await server.avito_seller("987654")
-
-    assert "seller_identity_missing" in result.meta.warnings
-
-
-# ------------------------------------------------------------ avito_selfcheck ----
-
-
-async def test_selfcheck_reports_healthy_when_probes_parse(monkeypatch):
-    def fake_fetch_factory(payload):
-        async def fake_fetch(url, ctx):
-            return _ok(payload)
-
-        return fake_fetch
-
-    async def fake_fetch(url, ctx):
-        if "userId" in url:
-            return _ok(SELLER_PAYLOAD)
-        return _ok(SEARCH_PAYLOAD)
-
-    monkeypatch.setattr(server, "_fetch", fake_fetch)
-
-    result = await server.avito_selfcheck()
-
-    assert result.status == "success"
-    assert result.healthy is True
-    assert result.checks["search"].state == "healthy"
+    payload = payload if isinstance(payload, dict) else json.loads(payload)
+    assert {k: payload[k] for k in ("title", "price", "photos", "delivery", "firewall", "captcha")} == {
+        "title": "iPhone 13 128 ГБ",
+        "price": "52000",
+        "photos": 4,
+        "delivery": True,
+        "firewall": False,
+        "captcha": False,
+    }
+    assert payload["params"] == ["Состояние: Б/у", "Встроенная память: 128 ГБ", "Цвет: синий"]
+    assert (payload["seller_kind"], payload["seller_rating"], payload["seller_reviews"]) == (
+        "Частное лицо",
+        "4,9",
+        "37 отзывов",
+    )
+    assert payload["seller_since"] == "На Авито с марта 2019"
+    assert payload["description"].startswith("Телефон в хорошем состоянии")
 
 
-async def test_selfcheck_maps_a_block_to_inconclusive_never_drift(monkeypatch):
-    """The firewall 403 is the expected datacenter state — it must not be read
-    as parser drift."""
-    _patch_fetch(monkeypatch, (403, FIREWALL_BODY, "curl_cffi"))
-
-    result = await server.avito_selfcheck()
-
-    assert result.status == "inconclusive"
-    assert result.healthy is None
-    assert all(c.state == "inconclusive" for c in result.checks.values())
+# ------------------------------------------------------------ selfcheck ----
 
 
-async def test_selfcheck_flags_drift_when_a_200_fails_the_parse_smoke(monkeypatch):
-    _patch_fetch(monkeypatch, _ok({"unexpected": "envelope"}))
-
-    result = await server.avito_selfcheck()
-
-    assert result.status == "drift_detected"
-    assert result.healthy is False
-
-
-async def test_selfcheck_accepts_the_captured_live_payload(monkeypatch):
-    """The real captured js/items payload must read as healthy through the
-    whole selfcheck — registry comparison included."""
-    from pathlib import Path
-
-    payload = json.loads((Path(__file__).parent / "fixtures" / "js_items_live.json").read_text(encoding="utf-8"))
-
-    async def fake_fetch(url, ctx):
-        if "userId" in url:
-            return _ok(SELLER_PAYLOAD)
-        return _ok(payload)
-
-    monkeypatch.setattr(server, "_fetch", fake_fetch)
+async def test_selfcheck_is_healthy_on_the_live_payload(monkeypatch):
+    fake_tab(monkeypatch, json_doc(LIVE_JSON))
 
     result = await server.avito_selfcheck()
 
     assert result.checks["search"].state == "healthy"
+
+
+async def test_selfcheck_maps_a_refusal_to_inconclusive_never_drift(monkeypatch):
+    fake_tab(monkeypatch, NavBlocked(429, "https://www.avito.ru/web/1/js/items"))
+
+    result = await server.avito_selfcheck()
+
+    assert result.checks["search"].state == "inconclusive"
 
 
 async def test_selfcheck_flags_drift_when_a_key_family_vanishes(monkeypatch):
-    """'id' renamed past every alias while the titles survive: the parse smoke
-    would happily serve id-less items; the shape comparison must cry drift and
-    name the lost family."""
-    from pathlib import Path
-
-    payload = json.loads((Path(__file__).parent / "fixtures" / "js_items_live.json").read_text(encoding="utf-8"))
+    payload = json.loads(LIVE_JSON)
     for item in payload["catalog"]["items"]:
         item["idRenamed"] = item.pop("id")
-
-    async def fake_fetch(url, ctx):
-        if "userId" in url:
-            return _ok(SELLER_PAYLOAD)
-        return _ok(payload)
-
-    monkeypatch.setattr(server, "_fetch", fake_fetch)
+    fake_tab(monkeypatch, json_doc(json.dumps(payload, ensure_ascii=False)))
 
     result = await server.avito_selfcheck()
 
-    assert result.status == "drift_detected"
-    entry = result.checks["search"]
-    assert entry.state == "drift"
-    assert any("items[].id" in note for note in entry.notes)
-
-
-# ------------------------------------------------------------------- helpers ----
-
-
-def test_extract_item_id_handles_every_accepted_shape():
-    assert server._extract_item_id("4612345678") == 4612345678
-    assert server._extract_item_id("/moskva/noutbuki/x_4612345678") == 4612345678
-    assert server._extract_item_id("https://www.avito.ru/moskva/x_4612345678?context=1") == 4612345678
-    assert server._extract_item_id("ноутбук") is None
-    assert server._extract_item_id("123") is None
-
-
-def test_search_url_carries_query_page_location():
-    url = server._build_search_url("ноутбук сsd", 2, "637640", "4")
-    assert "q=%D0%BD%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA" in url or "q=" in url
-    assert "p=2" in url
-    assert "locationId=637640" in url
-    assert "categoryId=4" in url
-    assert url.startswith("https://www.avito.ru/web/1/js/items?")
-
-
-# ------------------------------------------------------------ refusal backoff ----
-#
-# Avito bans by IP reputation and request rate, so a refusal must slow the next
-# call down and a run of them must tell the operator what to change. Verified
-# live July 2026: a burst of selfcheck calls turned a working source into an
-# HTTP 439/429-class refusal.
-
-
-def test_a_block_is_reported_to_the_pacer(monkeypatch):
-    server._pacer.reset()
-
-    with pytest.raises(ToolError):
-        server._raise_for_fetch_failure(429, "too-many-requests", "curl_cffi", "search")
-
-    assert server._pacer.consecutive_refusals == 1
-
-
-def test_a_not_found_is_not_counted_as_a_refusal():
-    """404 means the ad is gone. Slowing down does not bring it back."""
-    server._pacer.reset()
-
-    with pytest.raises(ToolError):
-        server._raise_for_fetch_failure(404, "", "curl_cffi", "card")
-
-    assert server._pacer.consecutive_refusals == 0
-
-
-def test_a_standing_block_tells_the_operator_what_to_change():
-    server._pacer.reset()
-    for _ in range(server._pacer.rotation_threshold):
-        server._pacer.record_refusal()
-
-    message = str(server._blocked_error("curl_cffi"))
-
-    assert "standing block" in message
-    assert "residential" in message
-    server._pacer.reset()
-
-
-def test_a_single_block_does_not_cry_wolf():
-    server._pacer.reset()
-    server._pacer.record_refusal()
-
-    assert "standing block" not in str(server._blocked_error("curl_cffi"))
-    server._pacer.reset()
-
-
-# ---------------------------------------------------------- debug redaction ----
-#
-# The tier-1 fallback tells the client it is trying CDP and logs the exception
-# that knocked tier 1 out. A connect failure embeds the proxy URL — including
-# credentials — into the exception text, so that debug line must pass through
-# the same redaction as every other error path in this connector.
-
-
-async def test_fetch_debug_never_leaks_tier1_exception_secrets(monkeypatch):
-    async def no_wait():
-        return None
-
-    def exploding_get(url, proxy=None):
-        raise ConnectionError("failed to connect to http://user:p/ss@proxy.example:3128")
-
-    async def fake_cdp_fetch(url, ctx):
-        return 200, '{"items": []}'
-
-    monkeypatch.setattr(server, "_polite_wait", no_wait)
-    monkeypatch.setattr(server, "_sync_curl_get", exploding_get)
-    monkeypatch.setattr(server, "_cdp_fetch", fake_cdp_fetch)
-
-    class RecordingCtx:
-        def __init__(self):
-            self.messages: list[str] = []
-
-        async def debug(self, message):
-            self.messages.append(str(message))
-
-        async def info(self, message):
-            self.messages.append(str(message))
-
-    ctx = RecordingCtx()
-    await server._fetch("https://www.avito.ru/web/1/js/items?q=x", ctx)
-
-    debugged = "\n".join(ctx.messages)
-    assert "p/ss" not in debugged, f"proxy password leaked into ctx.debug: {debugged}"
-    assert "proxy.example:3128" in debugged, "redaction ate the host — the diagnosis must survive"
+    assert result.checks["search"].state == "drift"
+    assert any("items[].id" in note for note in result.checks["search"].notes)

@@ -136,11 +136,7 @@ def test_total_count_is_read_from_the_envelope() -> None:
     assert total == 48451
 
 
-def test_absent_seller_stays_none() -> None:
-    """These rows carry no seller object — only ``userLogo``.
-
-    Reporting None is correct. Deriving a name from the logo link would be a guess
-    dressed as a seller.
-    """
+def test_rows_carry_no_seller_name() -> None:
+    """A private seller's name is personal data: search rows never carry one."""
     for item in _items():
-        assert item.seller_name is None
+        assert "seller_name" not in item.model_dump()
