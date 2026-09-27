@@ -10,7 +10,6 @@ import asyncio
 import json
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from compare_connector import server
@@ -68,21 +67,6 @@ async def test_compare_verify_offer_dispatches_to_source_card(monkeypatch):
     assert result["source"] == "wildberries"
     assert result["card"]["items"][0]["nm_id"] == 123
     assert result["price_verification"]["matches"] is True
-
-
-async def test_megamarket_card_dispatch_uses_native_argument_in_both_profiles(monkeypatch):
-    from compare_connector import decision_server
-
-    calls: list[str] = []
-
-    async def card(*, item_id_or_url):
-        calls.append(item_id_or_url)
-        return {"item_id": item_id_or_url, "price_rub": 1234}
-
-    monkeypatch.setattr(server, "SOURCES", {"megamarket": SimpleNamespace(megamarket_card=card)})
-    assert (await server.compare_verify_offer("megamarket", "100023282378"))["card"]["item_id"] == "100023282378"
-    assert (await decision_server.decision_inspect("megamarket", "100023282378"))["card"]["item_id"] == "100023282378"
-    assert calls == ["100023282378", "100023282378"]
 
 
 async def test_default_comparison_omits_deselected_sources_but_explicit_request_is_rejected(monkeypatch):
@@ -255,18 +239,18 @@ async def test_challenge_keeps_partial_results_and_recovers_only_failed_source(m
         calls.append("wildberries")
         return [offer("wildberries", 500.0)]
 
-    async def taobao(query, limit):
-        calls.append("taobao")
+    async def aliexpress(query, limit):
+        calls.append("aliexpress")
         if blocked:
             error = ChallengeRequiredError("visible challenge " * 40, challenge_type="login_or_captcha")
             if wire_error:
                 raise_tool_error(error)
             raise error
-        return [offer("taobao", None, currency="cny", price_native=35)]
+        return [offer("aliexpress", 450.0)]
 
-    stub_sources(monkeypatch, {"wildberries": wb, "taobao": taobao})
+    stub_sources(monkeypatch, {"wildberries": wb, "aliexpress": aliexpress})
     result = await server.compare_prices(query="тест")
-    outcome = next(o for o in result.source_outcomes if o.source == "taobao")
+    outcome = next(o for o in result.source_outcomes if o.source == "aliexpress")
     assert result.complete is False
     assert result.cheapest.source == "wildberries"
     assert outcome.status == "blocked"
@@ -275,12 +259,12 @@ async def test_challenge_keeps_partial_results_and_recovers_only_failed_source(m
     assert outcome.requires_user_action is True
     assert outcome.challenge_type == "login_or_captcha"
     assert len(outcome.detail) <= 200
-    assert calls.count("taobao") == 1  # no blind challenge retry loop
+    assert calls.count("aliexpress") == 1  # no blind challenge retry loop
 
     blocked = False  # a later call after browser action completed
-    resumed = await server.compare_prices(query="тест", sources=["taobao"])
+    resumed = await server.compare_prices(query="тест", sources=["aliexpress"])
     assert resumed.complete is True  # only for this retry's requested sources
-    assert resumed.sources_ok == ["taobao"]
+    assert resumed.sources_ok == ["aliexpress"]
     assert resumed.source_outcomes[0].requires_user_action is False
     assert calls.count("wildberries") == 1
 
@@ -875,38 +859,6 @@ async def test_avito_adapter_maps_classified_fields(monkeypatch):
     assert got[1].price_rub is None, "a priceless ad stays priceless — never 0"
 
 
-async def test_taobao_adapter_never_ranks_yuan_as_rubles(monkeypatch):
-    from taobao_connector.models_output import TaobaoSearchItemOut
-
-    class FakeTaobaoServer:
-        async def taobao_search(self, query, page):
-            return _FakeResponse(
-                [
-                    TaobaoSearchItemOut(
-                        item_id="123456789012",
-                        title="Apple iPhone 16",
-                        price_cny=9999.0,
-                        shop_name="苹果官方旗舰店",
-                        url="https://item.taobao.com/item.htm?id=123456789012",
-                    )
-                ]
-            )
-
-    monkeypatch.setitem(server.SOURCES, "taobao", FakeTaobaoServer())
-
-    got = await server._search_taobao("手机", 10)
-
-    assert got[0].price_rub is None, "yuan must never enter ruble ranking"
-    assert got[0].seller == "苹果官方旗舰店"
-    assert "taobao" in server.FOREIGN_CURRENCY_SOURCES
-    # The yuan figure must survive the adapter. Asserting only price_rub is
-    # None proves nothing — that is hardcoded, so the old test passed while the
-    # connector fetched a real price and threw it away.
-    assert got[0].currency == "cny"
-    assert got[0].price_native == 9999.0
-    assert not server._ranks_in_rubles(got[0])
-
-
 async def test_a_yuan_offer_never_becomes_cheapest(monkeypatch):
     """End-to-end: a cheap yuan number must not outrank a dearer rouble one.
 
@@ -942,26 +894,25 @@ async def test_a_foreign_currency_offer_cannot_be_smuggled_into_the_ranking():
 
 async def test_cdp_source_adapters_map_their_fields(monkeypatch):
     """Every CDP adapter must map its connector's typed model onto MarketOffer."""
-    from megamarket_connector.models_output import MegamarketSearchItemOut
+    from aliexpress_connector.models_output import AliSearchItemOut
 
-    class FakeMegamarket:
-        async def megamarket_search(self, query):
+    class FakeAli:
+        async def aliexpress_search(self, query):
             return _FakeResponse(
                 [
-                    MegamarketSearchItemOut(
-                        item_id="1234567",
-                        title="Стиральная машина",
-                        price_rub=32990.0,
+                    AliSearchItemOut(
+                        item_id="1005001234567",
+                        title="Часы",
+                        price_rub=3290.0,
                         rating=4.7,
-                        rating_count=213,
-                        url="https://megamarket.ru/x",
+                        url="https://aliexpress.ru/item/1005001234567.html",
                     )
                 ]
             )
 
-    monkeypatch.setitem(server.SOURCES, "megamarket", FakeMegamarket())
-    got = await server._search_megamarket("стиральная машина", 10)
-    assert got[0].price_rub == 32990.0
+    monkeypatch.setitem(server.SOURCES, "aliexpress", FakeAli())
+    got = await server._search_aliexpress("часы", 10)
+    assert got[0].price_rub == 3290.0
     assert got[0].rating == 4.7
 
 

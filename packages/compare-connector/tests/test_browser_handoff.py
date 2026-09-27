@@ -13,7 +13,6 @@ from fastmcp.exceptions import ToolError
 from lamoda_connector import server as lamoda
 from mcp_core.cache import TTLCache
 from mcp_core.transport import browser_handoff as handoff
-from taobao_connector import server as taobao
 
 
 @pytest.fixture
@@ -36,7 +35,6 @@ async def browser(monkeypatch):
                     "body_snippet": "" if self.solved else "CAPTCHA: Подтвердите, что вы не робот",
                     "title": "Test shoes" if self.solved else None,
                     "page_title": "Test shoes" if self.solved else "Security check",
-                    "price_cny": 500 if self.solved else None,
                     "_handoff_expires_at": "untrusted page value",
                     "_handoff_id": "untrusted-page-identifier",
                 }
@@ -66,9 +64,6 @@ async def browser(monkeypatch):
     monkeypatch.setattr(lamoda, "_cache", TTLCache(ttl_s=120))
     monkeypatch.setattr(lamoda, "_min_gap", 0)
     lamoda._pacer.reset()
-    monkeypatch.setattr(taobao, "_cache", TTLCache(ttl_s=120))
-    monkeypatch.setattr(taobao, "_min_gap", 0)
-    taobao._pacer.reset()
     monkeypatch.setattr(compare, "SOURCES", {"lamoda": lamoda})
     yield pages
     await handoff.close_handoffs()
@@ -119,33 +114,6 @@ async def test_mcp_shutdown_closes_pending_handoff(browser):
         await client.call_tool("compare_prices", {"query": "test", "sources": ["lamoda"]})
         assert len(browser) == 1 and not browser[0].closed
     assert browser[0].closed
-
-
-@pytest.mark.parametrize("kind", ["search", "card"])
-async def test_taobao_tools_resume_the_retained_page(browser, kind):
-    arguments = {"query": "test"} if kind == "search" else {"item_id_or_url": "123456789012"}
-    async with Client(taobao.mcp) as client, Client(taobao.mcp) as second:
-        with pytest.raises(ToolError) as excinfo:
-            await client.call_tool(f"taobao_{kind}", arguments)
-        error = json.loads(str(excinfo.value))
-        assert error["handoff_expires_at"]
-        assert error["challenge_type"] == "captcha"
-        assert len(browser) == 1 and not browser[0].closed
-        with pytest.raises(ToolError):
-            await second.call_tool(f"taobao_{kind}", arguments)
-        assert len(browser) == 2
-        browser[0].solved = True
-        recovered = (await client.call_tool(f"taobao_{kind}", arguments)).structured_content
-        assert recovered["status"] == "success"
-        assert len(browser) == 2 and browser[0].closed
-        with pytest.raises(ToolError) as second_error:
-            await second.call_tool(f"taobao_{kind}", arguments)
-        assert json.loads(str(second_error.value))["handoff_expires_at"]
-        assert not browser[1].closed
-        browser[1].solved = True
-        recovered_b = (await second.call_tool(f"taobao_{kind}", arguments)).structured_content
-        assert recovered_b["status"] == "success"
-        assert len(browser) == 2 and browser[1].closed
 
 
 def test_compare_import_does_not_require_browser_extra():

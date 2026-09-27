@@ -61,5 +61,5 @@ repos:
         name: one version, everywhere
         entry: python scripts/check_versions.py
         language: system
-        files: (pyproject\.toml|__init__\.py|server\.py|server\.json|docker-compose\.yml|DEPLOYMENT\.md)$
+        files: (pyproject\.toml|__init__\.py|server\.py)$
         pass_filenames: false

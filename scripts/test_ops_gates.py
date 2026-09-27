@@ -6,17 +6,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from mcp_wire import _check_gate, _snapshot
-from model_routing_eval import evaluate as evaluate_model_routing
-from routing_eval import evaluate, route
-
-
-def test_routing_fixture_covers_positive_and_negative_cases() -> None:
-    report = evaluate()
-    assert report["ok"] is True
-    assert report["accuracy"] == 1.0
-    assert route("где дешевле купить чайник") == "compare-prices"
-    assert route("отзывы на озоне") == "ozon-connector"
-    assert route("все источники") == "marketplace"
 
 
 def test_wire_gate_fails_on_token_regression() -> None:
@@ -34,16 +23,11 @@ def test_wire_snapshot_is_machine_readable() -> None:
     json.dumps(snapshot, ensure_ascii=False)
 
 
-def test_model_routing_matrix_is_complete() -> None:
-    report = evaluate_model_routing()
-    assert report["ok"] is True
-
-
 if __name__ == "__main__":
     # The documented invocation is `uv run python scripts/test_ops_gates.py`
     # (README, Development section). Without this runner that command exits 0
     # having collected nothing — a vacuous gate, the same bug class as a check
-    # that cannot fail. pytest.main runs the three tests above and propagates
+    # that cannot fail. pytest.main runs the tests above and propagates
     # the real exit code; `uv run pytest scripts/test_ops_gates.py` keeps
     # working unchanged.
     import pytest

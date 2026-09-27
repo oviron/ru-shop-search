@@ -24,14 +24,10 @@ dependencies = [
     "yandex-connector",
     "compare-connector",
     "avito-connector",
-    "taobao-connector",
-    "megamarket-connector",
     "lamoda-connector",
     "dns-connector",
     "citilink-connector",
-    "mpstats-connector",
     "aliexpress-connector",
-    "cian-connector",
     "marketplace-connector",
 ]
 
@@ -52,14 +48,10 @@ detmir-connector = { workspace = true }
 yandex-connector = { workspace = true }
 compare-connector = { workspace = true }
 avito-connector = { workspace = true }
-taobao-connector = { workspace = true }
-megamarket-connector = { workspace = true }
 lamoda-connector = { workspace = true }
 dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
-mpstats-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
-cian-connector = { workspace = true }
 marketplace-connector = { workspace = true }
 
 [dependency-groups]
@@ -130,14 +122,10 @@ testpaths = [
     "packages/yandex-connector/tests",
     "packages/compare-connector/tests",
     "packages/avito-connector/tests",
-    "packages/taobao-connector/tests",
-    "packages/megamarket-connector/tests",
     "packages/lamoda-connector/tests",
     "packages/dns-connector/tests",
     "packages/citilink-connector/tests",
-    "packages/mpstats-connector/tests",
     "packages/aliexpress-connector/tests",
-    "packages/cian-connector/tests",
     "packages/marketplace-connector/tests",
 ]
 asyncio_mode = "auto"
@@ -162,14 +150,10 @@ source = [
     "packages/yandex-connector/src/yandex_connector",
     "packages/compare-connector/src/compare_connector",
     "packages/avito-connector/src/avito_connector",
-    "packages/taobao-connector/src/taobao_connector",
-    "packages/megamarket-connector/src/megamarket_connector",
     "packages/lamoda-connector/src/lamoda_connector",
     "packages/dns-connector/src/dns_connector",
     "packages/citilink-connector/src/citilink_connector",
-    "packages/mpstats-connector/src/mpstats_connector",
     "packages/aliexpress-connector/src/aliexpress_connector",
-    "packages/cian-connector/src/cian_connector",
     "packages/marketplace-connector/src/marketplace_connector",
 ]
 omit = [

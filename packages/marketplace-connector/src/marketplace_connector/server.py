@@ -7,7 +7,7 @@ habits carry over untouched, but the operator wires a single ``marketplace``
 entry into claude_desktop_config.json instead of one per source.
 
 Each connector is imported defensively: a missing optional dependency (Ozon's
-curl_cffi and Playwright, Taobao's Playwright) removes that source's tools
+curl_cffi and Playwright) removes that source's tools
 from the set rather than sinking the whole server. compare-prices rides along
 as its own namespace (``compare_prices``, ``compare_sources``).
 
@@ -52,10 +52,9 @@ mcp = FastMCP(
     "marketplace",
     instructions=(
         "All marketplace connectors in one server. Tools keep their per-source "
-        "names: wb_*, ozon_*, yandex_*, detmir_*, avito_*, taobao_*, "
-        "megamarket_*, lamoda_*, dns_*, citilink_*, aliexpress_*, mpstats_* plus compare_prices and "
-        "compare_sources. cian_* is real estate (flats, houses, commercial "
-        "property for sale or rent), not goods. Sources whose optional "
+        "names: wb_*, ozon_*, yandex_*, detmir_*, avito_*, "
+        "lamoda_*, dns_*, citilink_*, aliexpress_* plus compare_prices and "
+        "compare_sources. Sources whose optional "
         "dependencies are missing are simply absent from the set."
     ),
     version=SERVER_VERSION,
@@ -98,14 +97,6 @@ _CAPABILITIES: dict[str, dict[str, object]] = {
         "text_search": False,
     },
     "avito": {"access": "cdp", "requires_cdp": True, "requires_login": False, "currency": "rub", "text_search": True},
-    "taobao": {"access": "cdp", "requires_cdp": True, "requires_login": True, "currency": "cny", "text_search": True},
-    "megamarket": {
-        "access": "cdp",
-        "requires_cdp": True,
-        "requires_login": True,
-        "currency": "rub",
-        "text_search": True,
-    },
     "lamoda": {
         "access": "graphql_or_cdp",
         "requires_cdp": False,
@@ -128,16 +119,6 @@ _CAPABILITIES: dict[str, dict[str, object]] = {
         "currency": "rub",
         "text_search": True,
     },
-    "mpstats": {
-        "access": "api_token",
-        "requires_cdp": False,
-        "requires_login": False,
-        "currency": "rub",
-        "text_search": False,
-    },
-    # Real estate, not goods: search is by filters (deal, type, region, rooms,
-    # price, area), never by text, and it takes no part in compare_prices.
-    "cian": {"access": "cdp", "requires_cdp": True, "requires_login": False, "currency": "rub", "text_search": False},
 }
 
 
@@ -159,15 +140,11 @@ def _mount_all() -> None:
         ("yandex", "yandex_connector.server"),
         ("detmir", "detmir_connector.server"),
         ("avito", "avito_connector.server"),
-        ("taobao", "taobao_connector.server"),
-        ("megamarket", "megamarket_connector.server"),
         ("lamoda", "lamoda_connector.server"),
         ("dns", "dns_connector.server"),
         ("citilink", "citilink_connector.server"),
         ("aliexpress", "aliexpress_connector.server"),
-        ("cian", "cian_connector.server"),
         ("compare", "compare_connector.server"),
-        ("mpstats", "mpstats_connector.server"),
     )
     chosen = selected()
     for name, module_path in mounts:

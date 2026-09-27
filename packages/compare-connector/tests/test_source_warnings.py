@@ -13,8 +13,6 @@ CASES = [
     ("yandex_market", "yandex", "YandexSearchResponse", "yandex_search"),
     ("ozon", "ozon", "OzonSearchResponse", "ozon_search"),
     ("avito", "avito", "AvitoSearchResponse", "avito_search"),
-    ("taobao", "taobao", "TaobaoSearchResponse", "taobao_search"),
-    ("megamarket", "megamarket", "MegamarketSearchResponse", "megamarket_search"),
     ("lamoda", "lamoda", "LamodaSearchResponse", "lamoda_search"),
     ("dns", "dns", "DnsSearchResponse", "dns_search"),
     ("citilink", "citilink", "CitilinkSearchResponse", "citilink_search"),

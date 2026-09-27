@@ -35,10 +35,7 @@ class MarketOffer(BaseModel):
     )
     price_native: float | None = Field(
         default=None,
-        description=(
-            "Price as the marketplace quotes it, in `currency`. Equals price_rub for Russian "
-            "sources; for Taobao it carries the yuan price that price_rub deliberately omits."
-        ),
+        description=("Price as the marketplace quotes it, in `currency`. Equals price_rub for rouble offers."),
     )
     price_with_subscription_rub: float | None = Field(
         default=None,
@@ -66,7 +63,7 @@ class MarketOffer(BaseModel):
 
         Filling this here rather than in nine adapters means price_native is
         always the number the marketplace actually showed, whatever the source,
-        so a caller can read one field without special-casing Taobao.
+        so a caller can read one field without special-casing a source.
         """
         if self.price_native is None and self.currency == "rub":
             self.price_native = self.price_rub

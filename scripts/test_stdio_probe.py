@@ -1,4 +1,4 @@
-"""Subprocess regressions for the operational probes (no Docker/network needed)."""
+"""Subprocess regressions for the operational probes (no network needed)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-import e2e_stdio_check_docker
 import mcp_startup
 import mcp_wire
 from stdio_probe import ProbeError, StdioProbe
@@ -152,22 +151,10 @@ def replace_command(monkeypatch: pytest.MonkeyPatch, module: object, mode: str) 
         return child
 
     monkeypatch.setattr(module, "StdioProbe", start)
-    if module is e2e_stdio_check_docker:
-        monkeypatch.setenv("MCP_EXPECTED_VERSION", "fixture-current")
-        # Exercise the exchange with real local child processes, without Docker.
-        original_run = module.subprocess.run
-
-        def run(argv: list[str], **kwargs: object) -> object:
-            if argv[:3] == ["docker", "rm", "--force"]:
-                assert argv[3].startswith("mcp-stdio-probe-")
-                return None
-            return original_run(argv, **kwargs)
-
-        monkeypatch.setattr(module.subprocess, "run", run)
     return probes
 
 
-@pytest.mark.parametrize("module", [mcp_wire, mcp_startup, e2e_stdio_check_docker])
+@pytest.mark.parametrize("module", [mcp_wire, mcp_startup])
 def test_all_probe_entrypoints_fail_on_silence(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     probes = replace_command(monkeypatch, module, "silent")
     started = time.monotonic()
@@ -175,17 +162,13 @@ def test_all_probe_entrypoints_fail_on_silence(monkeypatch: pytest.MonkeyPatch, 
         tools, elapsed = module.fetch_tools(Path.cwd(), "fixture", timeout=0.15)
         assert tools is None
         assert elapsed < 3
-    elif module is mcp_startup:
-        assert module.measure(Path.cwd(), "fixture", timeout=0.15) == 1
     else:
-        monkeypatch.setattr(module, "TIMEOUT_S", 0.15)
-        monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-        assert module.main() == 1
+        assert module.measure(Path.cwd(), "fixture", timeout=0.15) == 1
     assert time.monotonic() - started < 3
     assert probes[0].proc.poll() is not None
 
 
-@pytest.mark.parametrize("module", [mcp_wire, mcp_startup, e2e_stdio_check_docker])
+@pytest.mark.parametrize("module", [mcp_wire, mcp_startup])
 @pytest.mark.parametrize("mode", ["noisy", "interleaved", "error1", "error2"])
 def test_all_probe_entrypoints_check_protocol(monkeypatch: pytest.MonkeyPatch, module: object, mode: str) -> None:
     probes = replace_command(monkeypatch, module, mode)
@@ -193,62 +176,6 @@ def test_all_probe_entrypoints_check_protocol(monkeypatch: pytest.MonkeyPatch, m
     if module is mcp_wire:
         tools, _ = module.fetch_tools(Path.cwd(), "fixture", timeout=3)
         assert (tools is not None) is success
-    elif module is mcp_startup:
-        assert module.measure(Path.cwd(), "fixture", timeout=3) == (0 if success else 1)
     else:
-        monkeypatch.setattr(module, "TIMEOUT_S", 3)
-        monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-        assert module.main() == (0 if success else 1)
+        assert module.measure(Path.cwd(), "fixture", timeout=3) == (0 if success else 1)
     assert probes[0].proc.poll() is not None
-
-
-@pytest.mark.parametrize("mode", ["error3", "toolerror"])
-def test_docker_probe_rejects_call_errors(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
-    probes = replace_command(monkeypatch, e2e_stdio_check_docker, mode)
-    monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-    assert e2e_stdio_check_docker.main() == 1
-    assert probes[0].proc.poll() is not None
-
-
-def test_docker_timeout_attempts_container_removal(monkeypatch: pytest.MonkeyPatch) -> None:
-    replace_command(monkeypatch, e2e_stdio_check_docker, "silent")
-    monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-    monkeypatch.setattr(e2e_stdio_check_docker, "TIMEOUT_S", 0.15)
-    original_run = e2e_stdio_check_docker.subprocess.run
-    removed: list[str] = []
-
-    def run(argv: list[str], **kwargs: object) -> object:
-        if argv[:3] == ["docker", "rm", "--force"]:
-            removed.append(argv[3])
-        return original_run(argv, **kwargs)
-
-    monkeypatch.setattr(e2e_stdio_check_docker.subprocess, "run", run)
-    assert e2e_stdio_check_docker.main() == 1
-    assert len(removed) == 1
-    assert removed[0].startswith("mcp-stdio-probe-")
-
-
-@pytest.mark.parametrize(
-    ("mode", "error"),
-    [
-        ("stale_initialize", "initialize server version: expected fixture-current, got fixture-old"),
-        ("stale_sources", "marketplace_sources server version: expected fixture-current, got fixture-old"),
-        ("missing_initialize", "initialize server version: expected fixture-current, got None"),
-        ("missing_sources", "marketplace_sources server version: expected fixture-current, got None"),
-    ],
-)
-def test_docker_probe_rejects_wrong_or_missing_versions(monkeypatch, capsys, mode, error) -> None:
-    probes = replace_command(monkeypatch, e2e_stdio_check_docker, mode)
-    monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-    assert e2e_stdio_check_docker.main() == 1
-    assert error in capsys.readouterr().err
-    assert probes[0].proc.poll() is not None
-
-
-def test_docker_probe_requires_expected_version_before_starting(monkeypatch, capsys) -> None:
-    probes = replace_command(monkeypatch, e2e_stdio_check_docker, "interleaved")
-    monkeypatch.setenv("MCP_DOCKER_IMAGE", "fixture")
-    monkeypatch.delenv("MCP_EXPECTED_VERSION")
-    assert e2e_stdio_check_docker.main() == 2
-    assert "MCP_EXPECTED_VERSION is not set" in capsys.readouterr().err
-    assert not probes

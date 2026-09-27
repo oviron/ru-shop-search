@@ -73,8 +73,6 @@ def test_all_comparison_sources_have_a_wheelhouse_dependency() -> None:
         "yandex_market": "yandex-connector",
         "ozon": "ozon-connector",
         "avito": "avito-connector",
-        "taobao": "taobao-connector",
-        "megamarket": "megamarket-connector",
         "lamoda": "lamoda-connector",
         "dns": "dns-connector",
         "citilink": "citilink-connector",

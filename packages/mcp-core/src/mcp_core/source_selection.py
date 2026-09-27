@@ -29,15 +29,11 @@ KNOWN_SOURCES = frozenset(
         "yandex_market",
         "detsky_mir",
         "avito",
-        "taobao",
-        "megamarket",
         "lamoda",
         "dns",
         "citilink",
         "aliexpress",
-        "cian",
         "compare",
-        "mpstats",
     }
 )
 

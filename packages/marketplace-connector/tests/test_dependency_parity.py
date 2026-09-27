@@ -37,8 +37,7 @@ SELF = "marketplace-connector"
 
 # The known profile packages: connector distributions that legitimately carry
 # servers beyond their _mount_all row. compare-connector ships the standalone
-# compare-mcp and decision-mcp profile servers (the middle DSH profile)
-# alongside the mounted `compare` source, so it is the one dependency that may
+# compare-mcp server alongside the mounted `compare` source, so it is the one dependency that may
 # exist for reasons the mounts table does not show. Listed by name so an
 # unmounted dependency has to be *declared* here, with a reason — never pass
 # silently, which is the exact failure mode this file exists against.
@@ -121,11 +120,11 @@ def test_the_mounts_table_was_read() -> None:
     rows it already knows, including the two this file exists because of.
     """
     pairs = _mounted_distributions()
-    assert len(pairs) >= 14, f"expected the full mount table, got {pairs}"
+    assert len(pairs) >= 10, f"expected the full mount table, got {pairs}"
     for known in [
         ("wildberries", "wb-connector"),
         ("aliexpress", "aliexpress-connector"),
-        ("cian", "cian-connector"),
+        ("dns", "dns-connector"),
         ("compare", "compare-connector"),
     ]:
         assert known in pairs, f"extraction lost a known mount row: {known} not in {pairs}"
@@ -186,7 +185,7 @@ def test_every_connector_dependency_is_mounted_or_a_known_profile() -> None:
     down. Every "<x>-connector" dependency except this package itself is either
     a row in _mount_all or a named profile package
     (KNOWN_PROFILE_DISTRIBUTIONS: compare-connector, which ships the compare-mcp
-    and decision-mcp profile servers alongside the mounted compare source).
+    server alongside the mounted compare source).
     """
     dependencies = _declared_dependencies()
     mounted = {distribution for _source, distribution in _mounted_distributions()}

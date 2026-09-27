@@ -93,7 +93,7 @@ def test_there_are_connectors_to_check() -> None:
     silently returned an empty list, the whole suite would pass by doing nothing
     — the failure mode this repo keeps finding elsewhere.
     """
-    assert len(CONNECTORS) >= 12, f"only found {CONNECTORS}"
+    assert len(CONNECTORS) >= 9, f"only found {CONNECTORS}"
 
 
 def test_only_the_runtime_packages_are_exempt() -> None:
@@ -314,28 +314,6 @@ def test_every_mounted_source_maps_to_a_skill() -> None:
         if not (_skill_dir(package) / "SKILL.md").is_file():
             missing.append(package)
     assert not missing, f"mounted by marketplace-mcp but no skill: {missing}"
-
-
-def test_the_docker_image_ships_the_skills() -> None:
-    """Servers without skills are twelve endpoints nothing knows how to call.
-
-    Two things have to line up: the Dockerfile must copy `skills/`, and
-    `.dockerignore` must not swallow the SKILL.md files on the way. The ignore
-    file excludes `*.md` at every level, so without an explicit exception the
-    COPY lands empty directories in the image — a change that reviews as correct
-    and ships nothing.
-    """
-    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "skills/" in dockerfile, "Dockerfile does not copy skills/ into the image"
-
-    ignore_path = REPO_ROOT / ".dockerignore"
-    if ignore_path.is_file():
-        ignore = ignore_path.read_text(encoding="utf-8")
-        if "*.md" in ignore:
-            assert "!skills/**/SKILL.md" in ignore, (
-                ".dockerignore excludes *.md but never re-includes skills/**/SKILL.md — "
-                "the image would get empty skill directories"
-            )
 
 
 def test_readme_points_at_the_skills() -> None:

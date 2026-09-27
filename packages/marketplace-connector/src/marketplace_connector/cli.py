@@ -1,12 +1,5 @@
 """Operator CLI for the marketplace connectors.
 
-Two commands cover the two moments an operator actually needs help with:
-
-``marketplace-mcp install``
-    Write the client config. Editing ``claude_desktop_config.json`` by hand is
-    where every setup mistake lives (wrong slashes, a stale path, a missing
-    comma), so the CLI prints the exact JSON block to paste, per client.
-
 ``marketplace-mcp doctor``
     Run every connector's selfcheck and report per-source status. This is the
     answer to "is it broken, or is it me": a source blocked from your network
@@ -17,42 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pathlib
-import shutil
 import sys
-from typing import Any
 
 from mcp_core.logging import log_event
 from mcp_core.source_selection import canonical
-
-# Clients whose config format this block is known to fit. A typo like
-# "cursour" should say so rather than silently printing a Claude block.
-# dsh has its own emitter below: the harness patch format is not mcpServers JSON.
-KNOWN_CLIENTS = {"claude", "claude-code", "cursor", "dsh"}
-
-# Gate variable for the emitted dsh rows. It doubles as the checkout path used
-# by `uv run --directory`, so one user action both enables and locates a server.
-DSH_ENV_DIR = "RU_MARKETPLACE_MCP_DIR"
-DSH_ENV_FULL = "RU_MARKETPLACE_MCP_FULL"
-DSH_ENV_DECISION = "RU_MARKETPLACE_MCP_DECISION"
-
-# (config key, console script, human note)
-SERVERS: list[tuple[str, str, str]] = [
-    ("wildberries", "wb-mcp", "anonymous HTTP — availability depends on your network"),
-    ("ozon", "ozon-mcp", "needs your Chrome for tier 2 — see docs/CDP_SETUP.md"),
-    ("yandex-market", "yandex-mcp", "anonymous HTTP"),
-    ("detsky-mir", "detmir-mcp", "anonymous HTTP"),
-    ("avito", "avito-mcp", "needs your Chrome — IP firewall"),
-    ("taobao", "taobao-mcp", "needs your Chrome — signed API"),
-    ("megamarket", "megamarket-mcp", "needs your Chrome — ServicePipe"),
-    ("lamoda", "lamoda-mcp", "cards anonymous; search needs your Chrome"),
-    ("dns", "dns-mcp", "needs your Chrome — Qrator proof-of-work"),
-    ("citilink", "citilink-mcp", "needs your Chrome — Qrator"),
-    ("aliexpress", "aliexpress-mcp", "needs your Chrome — AliExpress Russia"),
-    ("cian", "cian-mcp", "real estate; needs your Chrome — WAF by IP"),
-    ("compare-prices", "compare-mcp", "fans out across all of the above"),
-    ("mpstats", "mpstats-mcp", "optional paid analytics — requires MPSTATS_MP_AUTH in the server environment"),
-]
 
 _SELFCHECKS: list[tuple[str, str, str]] = [
     ("wildberries", "wb_connector.server", "wb_selfcheck"),
@@ -60,211 +21,11 @@ _SELFCHECKS: list[tuple[str, str, str]] = [
     ("yandex_market", "yandex_connector.server", "yandex_selfcheck"),
     ("detsky_mir", "detmir_connector.server", "detmir_selfcheck"),
     ("avito", "avito_connector.server", "avito_selfcheck"),
-    ("taobao", "taobao_connector.server", "taobao_selfcheck"),
-    ("megamarket", "megamarket_connector.server", "megamarket_selfcheck"),
     ("lamoda", "lamoda_connector.server", "lamoda_selfcheck"),
     ("dns", "dns_connector.server", "dns_selfcheck"),
     ("citilink", "citilink_connector.server", "citilink_selfcheck"),
     ("aliexpress", "aliexpress_connector.server", "aliexpress_selfcheck"),
-    ("cian", "cian_connector.server", "cian_selfcheck"),
-    ("mpstats", "mpstats_connector.server", "mpstats_selfcheck"),
 ]
-
-
-def _workspace_root() -> pathlib.Path | None:
-    """Find the source checkout this CLI is running from, if it is one.
-
-    Walks up from this file looking for the root pyproject that declares the uv
-    workspace. Returns None when installed as a plain wheel, where there is no
-    checkout to point `uv run --directory` at.
-    """
-    for parent in pathlib.Path(__file__).resolve().parents:
-        candidate = parent / "pyproject.toml"
-        try:
-            if candidate.is_file() and "[tool.uv.workspace]" in candidate.read_text(encoding="utf-8"):
-                return parent
-        except OSError:
-            continue
-    return None
-
-
-def _config_block() -> tuple[dict[str, Any], str]:
-    """The mcpServers block, one entry per source, plus a note on how it was built.
-
-    Two deployments need two different blocks. From a source checkout the
-    honest command is ``uv run --directory <that checkout>``, and we know the
-    path — printing a ``/path/to/...`` placeholder just moves a solved problem
-    onto the operator, which is where setup mistakes come from. From a wheel
-    install there is no checkout, so the console script on PATH is the command.
-    """
-    root = _workspace_root()
-    if root is not None:
-        block = {
-            key: {"command": "uv", "args": ["run", "--directory", str(root), script]} for key, script, _ in SERVERS
-        }
-        return block, f"# Paths point at this checkout: {root}"
-
-    block = {}
-    unresolved = []
-    for key, script, _ in SERVERS:
-        resolved = shutil.which(script)
-        if resolved is None:
-            unresolved.append(script)
-        block[key] = {"command": resolved or script, "args": []}
-    note = "# Installed as a package: commands are the console scripts on PATH."
-    if unresolved:
-        note += f"\n# Not found on PATH, left unresolved: {', '.join(unresolved)}"
-    return block, note
-
-
-def _yaml_double(value: str) -> str:
-    """Quote a scalar for double-quoted YAML (backslashes and quotes escaped)."""
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _dsh_row(catalog_id: str, command: str, disabled: str, args_lines: list[str]) -> str:
-    """One ``dsh-mcp-client`` row for ``cordis.patch.yml``.
-
-    The output is already indented as the second item of a top-level
-    ``- insert:`` patch list, matching FINAL-SPEC's bundle layout.
-    """
-    lines = [
-        f"    - id: {catalog_id}",
-        "      name: '@deepseek-ai/dsh-mcp-client'",
-        f'      disabled: !!js "{disabled}"',
-        "      config:",
-        "        serverName: rumarket",
-        "        transport: stdio",
-        f"        command: {command}",
-    ]
-    if args_lines:
-        lines.append("        args:")
-        lines.extend(args_lines)
-    else:
-        lines.append("        args: []")
-    lines.append("        failOnStartupError: false")
-    return "\n".join(lines)
-
-
-def _dsh_command(script: str, root: pathlib.Path | None) -> tuple[str, list[str], str | None]:
-    """Command fragments for one emitted dsh row.
-
-    From a source checkout, ``uv run --frozen --directory`` is the supported
-    native start and the gate variable is the directory value. From a wheel,
-    the console script on PATH is the command and the gate variable is only the
-    enable switch (any value works).
-    """
-    if root is not None:
-        args = [
-            "          - run",
-            "          - --frozen",
-            "          - --directory",
-            f"          - !!js \"process.env.{DSH_ENV_DIR} || '.'\"",
-            f"          - {script}",
-        ]
-        return '"uv"', args, None
-
-    resolved = shutil.which(script) or script
-    note = f"#   - console script {script}: resolved to {resolved}"
-    if shutil.which(script) is None:
-        note += " (NOT FOUND on PATH, left unresolved)"
-    return _yaml_double(resolved), [], note
-
-
-def _dsh_patch_block() -> tuple[str, str]:
-    """The dsh ``cordis.patch.yml`` rows for the three supported mounts.
-
-    Unlike Claude/Cursor, DeepSeek Harness does not consume an ``mcpServers``
-    JSON block: a plugin patch inserts ``@deepseek-ai/dsh-mcp-client`` rows.
-    All rows ship disabled at zero context cost until the operator opts in
-    (measured cost of the enabled rows is paid on EVERY client request).
-
-    The three rows deliberately share one ``serverName``. Their ``disabled``
-    expressions are mutually exclusive, so only one instance is ever alive:
-    ``RU_MARKETPLACE_MCP_FULL`` selects the unified row, otherwise
-    ``RU_MARKETPLACE_MCP_DECISION`` selects the middle row, and with neither
-    switch set the cheap ``compare-mcp`` row is selected.
-    """
-    root = _workspace_root()
-    compare_cmd, compare_args, compare_note = _dsh_command("compare-mcp", root)
-    compare_row = _dsh_row(
-        "ru-marketplace-compare",
-        compare_cmd,
-        f"!process.env.{DSH_ENV_DIR} || !!process.env.{DSH_ENV_FULL} || !!process.env.{DSH_ENV_DECISION}",
-        compare_args,
-    )
-    decision_cmd, decision_args, decision_note = _dsh_command("decision-mcp", root)
-    decision_row = _dsh_row(
-        "ru-marketplace-decision",
-        decision_cmd,
-        f"!process.env.{DSH_ENV_DIR} || !!process.env.{DSH_ENV_FULL} || !process.env.{DSH_ENV_DECISION}",
-        decision_args,
-    )
-    full_cmd, full_args, full_note = _dsh_command("marketplace-mcp", root)
-    full_row = _dsh_row(
-        "ru-marketplace-full",
-        full_cmd,
-        f"!process.env.{DSH_ENV_DIR} || !process.env.{DSH_ENV_FULL}",
-        full_args,
-    )
-
-    block = (
-        "# Add these rows to the `- insert:` list of your cordis.patch.yml (dsh).\n"
-        "# All rows start disabled (zero tool-schema cost until the env gates are\n"
-        "# set) and their conditions are mutually exclusive.\n"
-        "- insert:\n" + compare_row + "\n" + decision_row + "\n" + full_row
-    )
-
-    if root is not None:
-        note = (
-            f"# Set {DSH_ENV_DIR} to this checkout (or another clone): {root}\n"
-            f"# Decision set {DSH_ENV_DECISION}=1 for comparison + shortlist card inspection; full set {DSH_ENV_FULL}=1."
-        )
-    else:
-        lines = [
-            "# Installed as a package: commands are the console scripts on PATH, and",
-            f"# {DSH_ENV_DIR} is only the enable switch (set it to any value).",
-            f"# Decision set {DSH_ENV_DECISION}=1 for comparison + shortlist card inspection; full set {DSH_ENV_FULL}=1.",
-        ]
-        if compare_note:
-            lines.append(compare_note)
-        if decision_note:
-            lines.append(decision_note)
-        if full_note:
-            lines.append(full_note)
-        note = "\n".join(lines)
-    return block, note
-
-
-def cmd_install(argv: list[str]) -> int:
-    """Print the client config block to paste."""
-    if len(argv) > 1:
-        print("install accepts at most one client name", file=sys.stderr)
-        return 2
-    client = argv[0] if argv else "claude"
-    if client not in KNOWN_CLIENTS:
-        print(
-            f"unknown client {client!r}; expected one of {', '.join(sorted(KNOWN_CLIENTS))}",
-            file=sys.stderr,
-        )
-        return 2
-    if client == "dsh":
-        patch_block, patch_note = _dsh_patch_block()
-        print(patch_block)
-        print()
-        print(patch_note)
-        return 0
-    block, note = _config_block()
-    print(f"# Add to your mcpServers block ({client}).")
-    print(note)
-    print(json.dumps(block, indent=2, ensure_ascii=False))
-    print()
-    print("# Notes:")
-    for _, _, note_line in SERVERS:
-        print(f"#   - {note_line}")
-    print()
-    print("# Or wire one entry: the unified 'marketplace-mcp' server mounts every source.")
-    return 0
 
 
 def _check_detail(check: object) -> str:
@@ -391,7 +152,7 @@ def cmd_doctor(argv: list[str]) -> int:
                 f"Chrome CDP: reachable on {probe['host']}:{probe['port']} ({probe.get('contexts', '?')} context(s))."
             )
         else:
-            cdp_note = f"Chrome CDP: NOT reachable — {probe.get('reason')}. Avito/Taobao/Megamarket/Lamoda-search/DNS/Citilink/AliExpress/Cian need it."
+            cdp_note = f"Chrome CDP: NOT reachable — {probe.get('reason')}. Ozon/Avito/Lamoda-search/DNS/Citilink/AliExpress need it."
     except Exception as exc:
         cdp_note = f"Chrome CDP: probe failed ({type(exc).__name__})."
     print(f"\n  {cdp_note}")
@@ -441,11 +202,9 @@ def main(argv: list[str] | None = None) -> int:
         print(__doc__ or "marketplace-mcp CLI")
         return 0
     command, rest = args[0], args[1:]
-    if command == "install":
-        return cmd_install(rest)
     if command == "doctor":
         return cmd_doctor(rest)
-    print(f"unknown command {command!r}; expected install or doctor", file=sys.stderr)
+    print(f"unknown command {command!r}; expected doctor", file=sys.stderr)
     log_event("marketplace.cli.unknown", command=command)
     return 2
 

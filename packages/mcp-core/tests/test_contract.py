@@ -51,31 +51,6 @@ def test_avito_pricelss_item_is_none_not_zero():
     assert items[0]["price_rub"] != 0
 
 
-def test_megamarket_pricelss_item_is_none_not_zero():
-    from megamarket_connector.server import _parse_items
-
-    items, _total, _container_found = _parse_items({"items": [{"id": 1, "title": "x"}]})
-
-    assert items[0]["price_rub"] is None
-    assert items[0]["price_rub"] != 0
-
-
-def test_megamarket_reports_whether_an_items_container_existed():
-    """A missing container and an empty one mean different things.
-
-    Empty under a known key is "nothing matched". No known key holding a list
-    is "the shape moved", and the connector turns that into parser_drift rather
-    than a successful zero-result answer.
-    """
-    from megamarket_connector.server import _parse_items
-
-    _items, _total, found_empty = _parse_items({"items": []})
-    _items, _total, found_missing = _parse_items({"results": [{"id": 1}]})
-
-    assert found_empty is True
-    assert found_missing is False
-
-
 # ------------------------------------------------- firewall is never data ----
 
 
@@ -87,13 +62,6 @@ def test_avito_firewall_body_is_not_parsed_as_items():
 
     assert items == [], "a firewall body produced items"
     assert total is None
-
-
-def test_megamarket_code7_is_detected_as_a_block_not_data():
-    from megamarket_connector.server import _is_ip_block
-
-    assert _is_ip_block({"code": 7, "error": "Попробуйте отключить VPN"}) is True
-    assert _is_ip_block({"items": []}) is False
 
 
 # --------------------------------------------------------- block not absence ----

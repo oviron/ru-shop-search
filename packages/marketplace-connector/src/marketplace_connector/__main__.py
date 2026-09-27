@@ -11,10 +11,10 @@ import sys
 
 
 def main() -> int:
-    """Run the server, or the install/doctor CLI when a subcommand is given.
+    """Run the server, or the doctor CLI when a subcommand is given.
 
     ``marketplace-mcp`` with no arguments starts the MCP server; with
-    ``install`` or ``doctor`` it runs the operator CLI and exits. Subcommands
+    ``doctor`` it runs the operator CLI and exits. Subcommands
     go to stdout freely — only the server path owns the JSON-RPC stream.
     """
     if len(sys.argv) > 1:

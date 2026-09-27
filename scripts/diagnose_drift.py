@@ -17,7 +17,6 @@ counts, tag and class stems, and a handful of sample URLs.
 Run it from the machine whose Chrome holds the passed challenge:
 
     uv run python scripts/diagnose_drift.py citilink
-    uv run python scripts/diagnose_drift.py megamarket
     uv run python scripts/diagnose_drift.py all
 """
 
@@ -36,19 +35,13 @@ SOURCES: dict[str, tuple[str, str]] = {
     "citilink": ("https://www.citilink.ru/search/?text={q}", "/product/"),
     "dns": ("https://www.dns-shop.ru/search/?q={q}", "/product/"),
     "lamoda": ("https://www.lamoda.ru/catalogsearch/result/?q={q}", "/p/"),
-    "taobao": ("https://s.taobao.com/search?q={q}", "item.taobao.com"),
 }
 
-# Megamarket is not in SOURCES: it answers JSON over CDP rather than rendering
-# a page, so it gets its own probe instead of the DOM one.
-API_SOURCES = ("megamarket",)
 
 DEFAULT_QUERY = {
     "citilink": "ноутбук",
     "dns": "ноутбук",
     "lamoda": "кроссовки",
-    "taobao": "手机",
-    "megamarket": "стиральная машина",
 }
 
 # Structure only. No innerText, no attribute values beyond hrefs we already
@@ -185,70 +178,7 @@ def _verdict(d: dict) -> tuple[str, str]:
     return ("UNCLEAR", "the page rendered but carries few links. Inspect it by hand in the same profile.")
 
 
-async def diagnose_megamarket(query: str) -> int:
-    """Megamarket answers JSON, not HTML, so the DOM probe cannot see it.
-
-    Its drift means the connector reached a 200 and found no items array. The
-    useful question is which: a ServicePipe refusal wearing a 200, or a renamed
-    field. Reuse the connector's own transport so this measures the real path,
-    then fingerprint the envelope with shape_signature — paths and types, no
-    values, nothing from the logged-in session.
-    """
-    print(f"\n{'=' * 72}\nmegamarket  ·  mobile API via CDP\n{'=' * 72}")
-    try:
-        from megamarket_connector import server as mm
-    except ImportError as exc:
-        print(f"  megamarket-connector is not installed here: {exc}")
-        return 1
-
-    try:
-        status, text = await mm._cdp_post_json("/catalogService/catalog/search", {"text": query, "page": 1}, None)
-    except Exception as exc:
-        print(f"  request failed: {type(exc).__name__}: {exc}")
-        print("  Is Chrome running and has megamarket.ru passed ServicePipe in it?")
-        return 1
-
-    print(f"  HTTP {status}   {len(text):,} chars")
-    if status != 200:
-        print(f"  VERDICT: TRANSPORT — the API refused with {status}, nothing to parse.")
-        return 2
-
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        print(f"  body is not JSON. First 200 chars: {text[:200]!r}")
-        print("  VERDICT: WALL — a challenge page came back where JSON was expected.")
-        return 2
-
-    if mm._is_ip_block(payload):
-        print("  VERDICT: TRANSPORT — ServicePipe code-7 IP refusal, not a parser problem.")
-        print("  Open megamarket.ru in the scraping profile and let the challenge pass.")
-        return 2
-
-    items, total, found = mm._parse_items(payload)
-    print(f"  top-level keys   {sorted(payload)[:12]}")
-    print(f"  items container  {'found' if found else 'NOT FOUND'}   parsed {len(items)}   total={total}")
-
-    print("\n  response shape (paths and types, values dropped):")
-    for path in shape_signature(payload, max_depth=4)[:22]:
-        print(f"    {path}")
-
-    if found and items:
-        print("\n  VERDICT: NOT DRIFT — the parser understands this payload.")
-        return 0
-    if found:
-        print("\n  VERDICT: EMPTY — the array is there and empty. Try another query.")
-        return 2
-    print(
-        "\n  VERDICT: SHAPE MOVED — no list under items/goods/products/data.items.\n"
-        "  Find the array in the shape above and add its key to _parse_items."
-    )
-    return 2
-
-
 async def diagnose(source: str, query: str) -> int:
-    if source == "megamarket":
-        return await diagnose_megamarket(query)
     url_tpl, pattern = SOURCES[source]
     url = url_tpl.format(q=urllib.parse.quote(query))
     print(f"\n{'=' * 72}\n{source}  ·  {url}\n{'=' * 72}")
@@ -290,11 +220,11 @@ async def diagnose(source: str, query: str) -> int:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("source", choices=[*SOURCES, *API_SOURCES, "all"])
+    ap.add_argument("source", choices=[*SOURCES, "all"])
     ap.add_argument("--query", default=None, help="search term (per-source default otherwise)")
     args = ap.parse_args()
 
-    targets = [*SOURCES, *API_SOURCES] if args.source == "all" else [args.source]
+    targets = [*SOURCES] if args.source == "all" else [args.source]
     worst = 0
     for name in targets:
         rc = await diagnose(name, args.query or DEFAULT_QUERY[name])

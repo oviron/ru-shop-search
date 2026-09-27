@@ -6,9 +6,6 @@ that logic is testable without touching a network.
 
 from __future__ import annotations
 
-import json
-import pathlib
-import re
 import sys
 from types import SimpleNamespace
 
@@ -25,87 +22,6 @@ def offline_cdp_probe(monkeypatch):
         return {"reachable": False, "reason": "offline test"}
 
     monkeypatch.setattr(chrome_cdp, "probe_session", fake_probe)
-
-
-def test_install_prints_a_config_block_for_every_source(capsys):
-    rc = cli.cmd_install(["claude"])
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert '"wildberries"' in out
-    assert '"taobao"' in out
-    assert '"aliexpress"' in out
-    assert '"mpstats"' in out
-    assert "optional paid analytics" in out
-    assert "MPSTATS_MP_AUTH" in out
-    assert "marketplace-mcp" in out
-
-
-def test_config_block_covers_all_servers():
-    block, note = cli._config_block()
-
-    assert len(block) == len(cli.SERVERS)
-    for key, script, _ in cli.SERVERS:
-        assert block[key]["args"][-1] == script
-    # The block must name a real location, never a /path/to placeholder the
-    # operator has to hand-edit — that edit is where setup mistakes come from.
-    assert "/path/to/" not in json.dumps(block)
-    assert "/path/to/" not in note
-
-
-def test_dsh_install_emits_a_cordis_patch_instead_of_mcp_servers(capsys):
-    """dsh does not read claude_desktop_config.json; print its patch format."""
-    rc = cli.cmd_install(["dsh"])
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "- insert:" in out
-    assert "@deepseek-ai/dsh-mcp-client" in out
-    assert "serverName: rumarket" in out
-    assert "compare-mcp" in out
-    assert "decision-mcp" in out
-    assert "marketplace-mcp" in out
-    assert "mcpServers" not in out
-
-
-def test_dsh_install_rows_are_disabled_until_the_env_gate_is_set(capsys):
-    rc = cli.cmd_install(["dsh"])
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert cli.DSH_ENV_DIR in out
-    assert cli.DSH_ENV_FULL in out
-    assert 'disabled: !!js "!process.env.RU_MARKETPLACE_MCP_DIR' in out
-    assert out.count("disabled: !!js") == 3
-
-
-def test_dsh_patch_block_falls_back_to_console_scripts_outside_a_checkout(monkeypatch):
-    monkeypatch.setattr(cli, "_workspace_root", lambda: None)
-    monkeypatch.setattr(cli.shutil, "which", lambda script: f"/usr/local/bin/{script}")
-
-    block, note = cli._dsh_patch_block()
-
-    assert 'command: "/usr/local/bin/compare-mcp"' in block
-    assert 'command: "/usr/local/bin/marketplace-mcp"' in block
-    assert "enable switch" in note
-    assert "console script compare-mcp" in note
-    assert "console script marketplace-mcp" in note
-
-
-def test_generated_dsh_modes_match_the_committed_patch():
-    root = pathlib.Path(__file__).resolve().parents[3]
-    committed = (root / "dsh" / "cordis.patch.yml").read_text(encoding="utf-8")
-    generated, _ = cli._dsh_patch_block()
-
-    # Mode precedence and disabled-row directory fallback must survive copying
-    # the install output instead of installing the bundled DSH patch.
-    for pattern in (r'disabled: !!js "([^"]+)"', r'- !!js "(process.env.[^"]+)"'):
-        assert re.findall(pattern, generated) == re.findall(pattern, committed)
-    assert re.findall(r"          - ([\w-]+-mcp)\n", generated + "\n") == [
-        "compare-mcp",
-        "decision-mcp",
-        "marketplace-mcp",
-    ]
 
 
 def test_doctor_reports_per_source_status(monkeypatch, capsys):
@@ -153,7 +69,7 @@ def test_doctor_survives_a_selfcheck_that_raises(monkeypatch, capsys):
 
 
 def test_main_routes_subcommands_and_rejects_unknown(capsys):
-    assert cli.main(["install", "claude"]) == 0
+    assert cli.main(["install", "claude"]) == 2
     assert cli.main(["no-such-command"]) == 2
     assert cli.main(["--help"]) == 0
 
@@ -174,22 +90,6 @@ def test_doctor_writes_a_status_file(monkeypatch, capsys, tmp_path):
     assert report["healthy"] == 1
     assert report["sources"]["wildberries"]["status"] == "success"
     assert "checked_at" in report
-
-
-def test_install_rejects_an_unknown_client(capsys):
-    """A typo must not silently print a Claude block for Cursor."""
-    rc = cli.cmd_install(["cursour"])
-
-    assert rc == 2
-    assert "unknown client" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("argv", [["claude", "--bogus"], ["dsh", "cursor"], ["--bogus"]])
-def test_install_rejects_extra_arguments_and_unknown_flags(argv, capsys):
-    assert cli.cmd_install(argv) == 2
-    captured = capsys.readouterr()
-    assert captured.err
-    assert not captured.out
 
 
 @pytest.mark.parametrize(
@@ -252,22 +152,6 @@ async def test_run_one_selfcheck_reads_dict_and_model_responses(as_dict, monkeyp
         "inconclusive",
         "search:inconclusive (blocked http 403)",
     )
-
-
-def test_install_accepts_every_documented_client():
-    for client in sorted(cli.KNOWN_CLIENTS):
-        assert cli.cmd_install([client]) == 0
-
-
-def test_config_block_falls_back_to_console_scripts_outside_a_checkout(monkeypatch):
-    """Installed as a wheel there is no checkout, so uv run --directory is wrong."""
-    monkeypatch.setattr(cli, "_workspace_root", lambda: None)
-    monkeypatch.setattr(cli.shutil, "which", lambda script: f"/usr/local/bin/{script}")
-
-    block, note = cli._config_block()
-
-    assert block["wildberries"] == {"command": "/usr/local/bin/wb-mcp", "args": []}
-    assert "console scripts" in note
 
 
 def test_doctor_exit_code_prefers_drift_over_inconclusive(monkeypatch, capsys):

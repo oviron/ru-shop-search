@@ -3,8 +3,7 @@
 
 One release carries one version, but it is written down in fifty-odd places:
 every package's ``pyproject.toml`` and ``__init__.py``, every server's
-``SERVER_VERSION``, the MCP registry manifest, the compose file and the
-deployment guide. Bumping a release by hand means editing all of them, and the
+``SERVER_VERSION`` and the connectors' ``mcp-core`` pins. Bumping a release by hand means editing all of them, and the
 one that gets missed is silent — the wheel installs, the tests pass, and
 ``package.__version__`` reports the previous release to anyone who asks.
 
@@ -24,7 +23,6 @@ Runs in CI and as part of the release gate.
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -36,8 +34,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"')
 DUNDER_VERSION = re.compile(r'^__version__\s*=\s*"([^"]+)"')
 SERVER_VERSION = re.compile(r'^SERVER_VERSION\s*=\s*"([^"]+)"')
-IMAGE_TAG = re.compile(r"ru-marketplace-mcp:(\d[^\s\"']*)")
-OCI_IDENTIFIER = re.compile(r"ru-marketplace-mcp:(\d[^\s\"']*)$")
 # The `mcp-core==X.Y.Z` pin each connector carries. Inside the workspace it is
 # invisible — `uv.sources = { workspace = true }` overrides the constraint, so a
 # stale pin passes `uv lock`, `uv sync` and the whole suite. It only bites the
@@ -121,42 +117,10 @@ def main(argv: list[str]) -> int:
     sweep("__init__.py", sorted(REPO_ROOT.glob("packages/*/src/*/__init__.py")), DUNDER_VERSION)
     sweep("SERVER_VERSION", sorted(REPO_ROOT.glob("packages/*/src/*/server.py")), SERVER_VERSION)
     sweep(
-        "image tag",
-        [p for p in (REPO_ROOT / "docker-compose.yml", REPO_ROOT / "docs" / "DEPLOYMENT.md") if p.exists()],
-        IMAGE_TAG,
-        required=False,
-    )
-
-    sweep(
         "mcp-core pin",
         sorted(p for p in REPO_ROOT.glob("packages/*/pyproject.toml") if p.parent.name != "mcp-core"),
         CORE_PIN,
     )
-
-    # server.json is JSON, not line-oriented text: read the field directly.
-    manifest = REPO_ROOT / "server.json"
-    if manifest.exists():
-        manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
-        declared = manifest_data.get("version")
-        counts["server.json"] = 1 if declared is not None else 0
-        if declared != expected:
-            mismatches.append(Mismatch(("server.json", 0, str(declared), expected)))
-        for package in manifest_data.get("packages", []):
-            identifier = package.get("identifier") if isinstance(package, dict) else None
-            if not isinstance(identifier, str):
-                continue
-            match = OCI_IDENTIFIER.search(identifier)
-            if match is not None:
-                counts["OCI image tag"] = counts.get("OCI image tag", 0) + 1
-                if match.group(1) != expected:
-                    mismatches.append(Mismatch(("server.json", 0, match.group(1), expected)))
-
-    dsh_manifest = REPO_ROOT / "dsh" / "package.json"
-    if dsh_manifest.exists():
-        dsh_version = json.loads(dsh_manifest.read_text(encoding="utf-8")).get("version")
-        counts["dsh/package.json"] = 1 if dsh_version is not None else 0
-        if dsh_version != expected:
-            mismatches.append(Mismatch(("dsh/package.json", 0, str(dsh_version), expected)))
 
     if silent:
         sys.stderr.write("files that declare no version at all:\n")

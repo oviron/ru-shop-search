@@ -59,9 +59,9 @@ def test_deselected_sources_are_reported_not_hidden(unified_env):
     response = asyncio.run(server.marketplace_sources())
 
     assert "wildberries" in response.mounted
-    assert ENV_VAR in response.skipped["taobao"]
+    assert ENV_VAR in response.skipped["dns"]
     assert response.capabilities["wildberries"]["mounted"] is True
-    assert response.capabilities["taobao"]["mounted"] is False
+    assert response.capabilities["dns"]["mounted"] is False
 
 
 def test_capabilities_flag_survives_the_naming_mismatch(unified_env):

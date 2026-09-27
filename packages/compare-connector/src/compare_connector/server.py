@@ -75,8 +75,6 @@ _CARD_TOOL_NAMES = {
     "detsky_mir": "detmir_card",
     "ozon": "ozon_card",
     "avito": "avito_card",
-    "taobao": "taobao_card",
-    "megamarket": "megamarket_card",
     "lamoda": "lamoda_card",
     "dns": "dns_card",
     "citilink": "citilink_card",
@@ -128,20 +126,6 @@ def _available_sources() -> dict[str, Any]:
         log_event("compare.source_unavailable", source="avito", error=_redact(str(exc))[:120])
 
     try:
-        from taobao_connector import server as taobao_server
-
-        sources["taobao"] = taobao_server
-    except Exception as exc:
-        log_event("compare.source_unavailable", source="taobao", error=_redact(str(exc))[:120])
-
-    try:
-        from megamarket_connector import server as megamarket_server
-
-        sources["megamarket"] = megamarket_server
-    except Exception as exc:
-        log_event("compare.source_unavailable", source="megamarket", error=_redact(str(exc))[:120])
-
-    try:
         from lamoda_connector import server as lamoda_server
 
         sources["lamoda"] = lamoda_server
@@ -180,27 +164,17 @@ SOURCES = _available_sources()
 
 # Marketplaces that support a text query. Detsky Mir is absent on purpose: its
 # API has no working text search (see the detmir connector's module docstring),
-# so including it would mean returning products unrelated to the query. Cian is
-# absent too: it is real estate searched by filters, and a flat has no price to
-# compare against a kettle.
+# so including it would mean returning products unrelated to the query.
 SEARCHABLE = (
     "wildberries",
     "yandex_market",
     "ozon",
     "avito",
-    "taobao",
-    "megamarket",
     "lamoda",
     "dns",
     "citilink",
     "aliexpress",
 )
-
-# Yuan sources rank separately from ruble ones: a baked-in CNY→RUB rate would go
-# silently stale, and ranking a stale conversion against live ruble prices
-# fabricates bargains. Taobao offers are reported with currency="cny" and are
-# excluded from the cheapest-rub ranking.
-FOREIGN_CURRENCY_SOURCES = ("taobao",)
 
 
 def _dedupe(offers: Iterable[MarketOffer]) -> list[MarketOffer]:
@@ -597,65 +571,6 @@ async def _search_avito(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
-async def _search_taobao(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``taobao_search`` results, keeping the price in yuan.
-
-    price_rub stays None so a yuan figure can never win a ruble ranking, and
-    the actual price travels in price_native with currency="cny". Converting
-    here would mean baking in an exchange rate that goes stale silently and
-    fabricates bargains; reporting the yuan price and letting the caller
-    convert is the honest option.
-    """
-    server = SOURCES["taobao"]
-    response = await server.taobao_search(query=query, page=1)
-
-    offers: list[MarketOffer] = []
-    for item in (getattr(response, "items", None) or [])[:limit]:
-        offers.append(
-            MarketOffer(
-                source="taobao",
-                product_id=str(item.item_id or ""),
-                title=item.title or "",
-                brand="",
-                seller=item.shop_name or "",
-                price_rub=None,  # never rank yuan against rubles directly
-                currency="cny",
-                price_native=getattr(item, "price_cny", None),
-                rating=None,
-                rating_count=None,
-                in_stock=None,
-                url=item.url or "",
-            )
-        )
-    return OfferBatch(offers, response)
-
-
-async def _search_megamarket(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``megamarket_search`` results (CDP tier; rating present)."""
-    server = SOURCES["megamarket"]
-    response = await server.megamarket_search(query=query)
-
-    offers: list[MarketOffer] = []
-    for item in (getattr(response, "items", None) or [])[:limit]:
-        offers.append(
-            MarketOffer(
-                source="megamarket",
-                product_id=str(item.item_id or ""),
-                title=item.title or "",
-                brand="",
-                seller="",
-                price_rub=item.price_rub,
-                rating=item.rating,
-                rating_count=item.rating_count,
-                # The search payload reports isAvailable per item, so pass it
-                # through rather than discarding a stock signal we already have.
-                in_stock=getattr(item, "is_available", None),
-                url=item.url or "",
-            )
-        )
-    return OfferBatch(offers, response)
-
-
 async def _search_lamoda(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``lamoda_search`` results (CDP tier; Lamoda exposes no ratings)."""
     server = SOURCES["lamoda"]
@@ -763,8 +678,6 @@ _SEARCH_IMPLS = {
     "yandex_market": _search_yandex,
     "ozon": _search_ozon,
     "avito": _search_avito,
-    "taobao": _search_taobao,
-    "megamarket": _search_megamarket,
     "lamoda": _search_lamoda,
     "dns": _search_dns,
     "citilink": _search_citilink,
@@ -1012,8 +925,7 @@ async def compare_prices(
         key=lambda offer: offer.price_rub or 0.0,
     )
     # Unpriced offers keep their place at the end rather than being dropped:
-    # "found, but not priced in rubles" is information, and for Taobao the yuan
-    # price still rides along in price_native.
+    # "found, but not priced in rubles" is information.
     unpriced = [
         offer for offer in offers if not _ranks_in_rubles(offer) or (in_stock_only and offer.in_stock is not True)
     ]
@@ -1144,8 +1056,6 @@ async def _call_card_tool(name: str, product_id_or_url: str, *, include_reviews:
         argument = {
             "ozon": "sku_or_path",
             "avito": "item_id_or_url",
-            "taobao": "item_id_or_url",
-            "megamarket": "item_id_or_url",
             "lamoda": "sku_or_url",
             "dns": "product_url",
             "citilink": "product_url",
@@ -1334,8 +1244,6 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             else ("deselected by MARKETPLACE_SOURCES" if "detsky_mir" in deselected else "not installed"),
             "ozon": ("requires curl_cffi and, when Cloudflare challenges, a logged-in Chrome on the CDP port"),
             "yandex_market": "reports both an everyday price and a Plus-subscriber price",
-            "taobao": "reports yuan prices and is never ranked against rubles",
-            "megamarket": "reachable only through the operator's Chrome (ServicePipe)",
             "lamoda": "search through the operator's Chrome; cards via anonymous GraphQL",
             "dns": "reachable only through the operator's Chrome (Qrator)",
             "citilink": "reachable only through the operator's Chrome (Qrator)",

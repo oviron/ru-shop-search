@@ -33,17 +33,12 @@ EXPECTED_TOOLS = {
     "detmir-mcp": 3,
     "yandex-mcp": 2,
     "compare-mcp": 4,
-    "decision-mcp": 5,  # compare tools + decision_inspect
     "avito-mcp": 3,
-    "taobao-mcp": 2,
-    "megamarket-mcp": 2,
     "lamoda-mcp": 2,
     "dns-mcp": 2,
     "citilink-mcp": 2,
     "aliexpress-mcp": 2,
-    "cian-mcp": 2,
-    "mpstats-mcp": 2,
-    "marketplace-mcp": 40,  # 39 mounted + marketplace_sources
+    "marketplace-mcp": 32,  # 31 mounted + marketplace_sources
 }
 
 TIMEOUT_S = 60.0
@@ -57,14 +52,10 @@ EXPECTED_MOUNTS = {
     "yandex",
     "compare",
     "avito",
-    "taobao",
-    "megamarket",
     "lamoda",
     "dns",
     "citilink",
     "aliexpress",
-    "cian",
-    "mpstats",
 }
 
 

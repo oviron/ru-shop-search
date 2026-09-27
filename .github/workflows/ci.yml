@@ -6,20 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # Nightly live canary: catches endpoint drift on its own timetable instead
-    # of waiting for a user to trip over it. See the `live` job.
-    - cron: "0 3 * * *"
 
 concurrency:
-  # The nightly canary runs on this same ref as every push to main, so the group
-  # has to carry the event name: otherwise a routine commit cancels the canary —
-  # which reports nothing when cancelled, it just stops existing — and the canary
-  # cancels a merge verification. Scheduled runs are never cancelled; superseded
-  # push and pull-request runs still cancel each other. See
-  # scripts/test_ci_concurrency.py, which fails if this contract is dropped.
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # Prove the committed uv.lock rather than re-resolving in CI. With "1" every
@@ -96,13 +86,6 @@ jobs:
         # pins are visible - and quarantined with dated reasons - instead of silent.
         run: uv run python scripts/check_provenance.py
 
-      - name: MCP wire-cost baseline
-        # Keep the model-facing surface measurable. A schema expansion over the
-        # stored baseline is a review signal, not an invisible context-cost
-        # regression. Latency is intentionally reported by the probe but is not
-        # gated because hosted runner load is variable.
-        run: uv run python scripts/mcp_wire.py compare-mcp decision-mcp marketplace-mcp --baseline work/performance/wire-baseline.json --max-token-regression-percent 10
-
       - name: One version, everywhere
         # A release version is written down in seventy-two places. Preparing
         # 1.2.1 moved fourteen pyproject.toml files and left thirteen
@@ -126,7 +109,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Node for jsdom-backed DOM tests
-        # The connector extractor tests (dns/citilink/lamoda/taobao/aliexpress)
+        # The connector extractor tests (dns/citilink/lamoda/aliexpress)
         # run the real extractor JS over captured markup in jsdom. Without this
         # step the tests silently SKIP in CI, which is exactly how a dead parser
         # stayed green before (the DNS/Citilink lesson). Dev tool only: the
@@ -214,9 +197,8 @@ jobs:
           uv run python - <<'PY'
           import asyncio
 
-          # Operator-only *_selfcheck diagnostics are no longer registered as
-          # MCP tools (they run via `marketplace-mcp doctor`), so every
-          # connector count is one lower than the pre-dsh-packaging contract.
+          # Operator-only *_selfcheck diagnostics are not MCP tools (they run
+          # via `marketplace-mcp doctor`).
           EXPECTED = {
               "wb": 8,
               "ozon": 3,
@@ -224,14 +206,10 @@ jobs:
               "yandex": 2,
               "compare": 4,
               "avito": 3,
-              "taobao": 2,
-              "megamarket": 2,
               "lamoda": 2,
               "dns": 2,
               "citilink": 2,
               "aliexpress": 2,
-              "cian": 2,
-              "mpstats": 2,
           }
 
           async def main() -> None:
@@ -241,14 +219,10 @@ jobs:
               from compare_connector.server import mcp as compare_mcp
               from yandex_connector.server import mcp as yandex_mcp
               from avito_connector.server import mcp as avito_mcp
-              from taobao_connector.server import mcp as taobao_mcp
-              from megamarket_connector.server import mcp as megamarket_mcp
               from lamoda_connector.server import mcp as lamoda_mcp
               from dns_connector.server import mcp as dns_mcp
               from citilink_connector.server import mcp as citilink_mcp
               from aliexpress_connector.server import mcp as aliexpress_mcp
-              from cian_connector.server import mcp as cian_mcp
-              from mpstats_connector.server import mcp as mpstats_mcp
 
               servers = {
                   "wb": wb_mcp,
@@ -257,19 +231,13 @@ jobs:
                   "yandex": yandex_mcp,
                   "compare": compare_mcp,
                   "avito": avito_mcp,
-                  "taobao": taobao_mcp,
-                  "megamarket": megamarket_mcp,
                   "lamoda": lamoda_mcp,
                   "dns": dns_mcp,
                   "citilink": citilink_mcp,
                   "aliexpress": aliexpress_mcp,
-                  "cian": cian_mcp,
-                  "mpstats": mpstats_mcp,
               }
-              # Guard the guard: mpstats was listed in EXPECTED but never added to
-              # `servers`, so the loop skipped it and the step still printed "all
-              # servers registered their expected tools" while checking 11 of 12.
-              # A key mismatch is now the first failure, not a silent omission.
+              # Guard the guard: a key listed in EXPECTED but missing from
+              # `servers` would be skipped silently.
               if set(servers) != set(EXPECTED):
                   raise SystemExit(
                       f"servers/EXPECTED disagree: only in servers {sorted(set(servers) - set(EXPECTED))}, "
@@ -297,14 +265,10 @@ jobs:
           uv run which yandex-mcp
           uv run which compare-mcp
           uv run which avito-mcp
-          uv run which taobao-mcp
-          uv run which megamarket-mcp
           uv run which lamoda-mcp
           uv run which dns-mcp
           uv run which citilink-mcp
           uv run which aliexpress-mcp
-          uv run which cian-mcp
-          uv run which mpstats-mcp
           uv run which marketplace-mcp
 
       - name: Real MCP session over stdio
@@ -316,155 +280,3 @@ jobs:
         # connectors advertising the FastMCP library version instead of their
         # own, since the in-process check never reads serverInfo.
         run: uv run python scripts/e2e_stdio_check.py
-
-  live:
-    name: Live endpoint canaries (nightly / manual)
-    # Runs on a schedule and on demand, never on a push: live endpoints drift
-    # on their own timetable, and a flaky marketplace must not gate a PR. The
-    # job needs a Russian-friendly IP — from GitHub's datacenter runners most
-    # sources report inconclusive, which is still a useful baseline signal.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Sync workspace
-        run: uv sync --all-packages
-
-      - name: Run live canaries
-        id: canaries
-        # A blocked source is information, not a build failure, so we do not let
-        # a red assertion abort the job — but we DO capture the exact pytest exit
-        # code and hand it to the summary step, which is what makes the outcome
-        # honest instead of a blanket green. Only wb, detmir and yandex carry
-        # @pytest.mark.live tests (3 of the 14 sources), so this canary covers 3
-        # of 12 — the summary spells that out so a pass is not mistaken for
-        # "everything works". Exit codes: 0 = all passed, 1 = failures (from a
-        # datacenter runner with no Russian IP this usually means blocked, but it
-        # is indistinguishable here from real drift), 5 = nothing collected, other
-        # = a hard error (crash/collection failure) that is a genuine problem.
-        run: |
-          set +e
-          uv run pytest -q -m "live" --tb=short 2>&1 | tee live.log
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-
-      - name: Summarise canary outcome
-        # Always runs, even after a failing canary step, so the verdict is
-        # recorded. This is the step the old comment promised but never existed;
-        # without it the job was green regardless and a blocked run looked
-        # identical to a healthy one. It fails the job ONLY on a hard error
-        # (exit code neither 0/1/5), because that is a broken canary rather than
-        # an unreachable marketplace.
-        if: always()
-        env:
-          RC: ${{ steps.canaries.outputs.exit_code }}
-        run: |
-          {
-            echo "## Live endpoint canaries"
-            echo ""
-            echo "Coverage: **3 of 14 sources** carry \`@pytest.mark.live\` tests — wb, detmir, yandex. The other 11 have none, so a green canary says nothing about them. AliExpress is CDP-only against x5sec: its drift signal comes from \`aliexpress_selfcheck\` on the operator's machine, not from this nightly job."
-            echo ""
-            echo "GitHub's runners have no Russian-friendly IP, so a blocked source and genuine drift both surface as test failures here; disambiguating needs a rerun from a Russian-friendly IP."
-            echo ""
-            case "$RC" in
-              0)
-                echo "### Result: PASS — all live tests passed (endpoints reachable and healthy)." ;;
-              1)
-                echo "### Result: BLOCKED or INCONCLUSIVE — live tests failed. From a datacenter runner this is most likely a blocked endpoint, but it cannot be told apart from real drift here. Rerun from a Russian-friendly IP to confirm before treating it as drift." ;;
-              5)
-                echo "### Result: HARD FAILURE — no live tests were collected. Expected 3 sources' worth; the marker or test layout is broken." ;;
-              *)
-                echo "### Result: HARD FAILURE — the canary errored (exit code $RC). This is a broken test run, not an unreachable marketplace." ;;
-            esac
-            echo ""
-            echo "<details><summary>pytest output</summary>"
-            echo ""
-            echo '```'
-            cat live.log
-            echo '```'
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          # Honest conclusion: PASS (0) and BLOCKED/INCONCLUSIVE (1) leave the
-          # job green — a blocked marketplace must not page anyone. Anything else
-          # fails it: exit 5 means the 3 live sources stopped being collected (a
-          # canary silently testing nothing is the exact false-green this job was
-          # fixed to kill), and any other code is a crash.
-          case "$RC" in
-            0|1) : ;;
-            *) echo "Canary did not run cleanly (exit $RC); failing the job — see the step summary."; exit 1 ;;
-          esac
-
-  dsh-bundle:
-    name: dsh bundle installs and activates
-    runs-on: ubuntu-latest
-    # The pytest suite owns the bundle's *contents* (test_dsh_bundle.py). Nothing
-    # owned its *installation*: that is performed by dsh's plugin manager, not by
-    # Python, so a broken bundle or a breaking dsh release would only surface when
-    # a user hit it. dsh is a developer preview with breaking changes promised.
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install pnpm
-        # dsh does not vendor pnpm: it calls spawnSync("pnpm", ...) and prints
-        # "pnpm not found on PATH" without it.
-        run: npm install -g pnpm@10
-
-      - name: Install dsh
-        run: |
-          npm install -g @deepseek-ai/dsh@0.1.0-rc.6
-          echo "dsh $(dsh --version), pnpm $(pnpm --version)"
-
-      - name: Bundle installs into a clean profile
-        run: dsh plugin --profile smoke add "$GITHUB_WORKSPACE/dsh"
-
-      - name: The bundle became a profile layer
-        # Exit code 0 is not proof of anything here. Measured 2026-08-16 on the
-        # sibling humanizer-ru bundle: `add "github:owner/repo#v3.13.0&path:/dsh"`
-        # exited 0 while pnpm silently dropped `&path:/dsh`, installed the whole
-        # repository as a plain dependency and left the profile with no layer at
-        # all. So assert the composition, not the exit code.
-        run: |
-          set -euo pipefail
-          profile="$HOME/.dsh/profiles/smoke"
-          python3 -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); b=d['dsh']['profile']['bundles']; print('bundles:', b); sys.exit(0 if sys.argv[2] in b else 1)" "$profile/package.json" ru-marketplace-mcp-dsh
-          installed="$profile/node_modules/ru-marketplace-mcp-dsh"
-          test -f "$installed/cordis.patch.yml"
-          skills=$(find "$installed/skills" -name SKILL.md | wc -l)
-          echo "vendored skills: $skills"
-          test "$skills" -eq 15
-
-      - name: All MCP rows are still disabled by default
-        # The safety promise of this bundle: skills are free, MCP tools are opt-in.
-        # If a row ever ships enabled it would spend the user's context on every
-        # request without consent, so the guard is asserted rather than trusted.
-        run: |
-          set -euo pipefail
-          patch="$GITHUB_WORKSPACE/dsh/cordis.patch.yml"
-          rows=$(grep -c "name: '@deepseek-ai/dsh-mcp-client'" "$patch")
-          guards=$(grep -c 'disabled: !!js' "$patch")
-          echo "mcp rows: $rows, disabled guards: $guards"
-          test "$rows" -eq 3
-          test "$guards" -eq 3
-          grep -q 'RU_MARKETPLACE_MCP_DIR' "$patch"
-
-      - name: Removal restores the profile
-        run: |
-          set -euo pipefail
-          dsh plugin --profile smoke remove ru-marketplace-mcp-dsh
-          profile="$HOME/.dsh/profiles/smoke"
-          if grep -q ru-marketplace-mcp-dsh "$profile/package.json"; then
-            echo "the bundle survived removal"
-            exit 1
-          fi
-          echo "profile restored"

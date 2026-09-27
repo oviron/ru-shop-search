@@ -43,12 +43,10 @@ def _strip_userinfo(url: str) -> str:
     return f"{scheme}{sep}<redacted>@{hostish}"
 
 
-# A whole Cookie header, and any cookie whose name ends in auth/token/session.
-# The MPStats connector sends `mp_auth=<JWT>`: a live paid session, the only
-# secret this project ever handles. httpx keeps headers out of exception text,
-# so nothing is known to leak today — but a docstring promised this scrubbing
-# existed before it did, and a secret that valuable deserves the belt as well
-# as the braces.
+# A whole Cookie header, and any cookie whose name ends in auth/token/session
+# (the WB search token `x_wbaas_token` among them). httpx keeps headers out of
+# exception text, so nothing is known to leak today; this is the belt to that
+# pair of braces.
 _COOKIE_HEADER_RE = re.compile(r"(Cookie:\s*)[^\r\n]+", re.IGNORECASE)
 _COOKIE_PAIR_RE = re.compile(r"\b([A-Za-z0-9_-]*(?:auth|token|session)=)[^;,\s\"']+", re.IGNORECASE)
 # A bare JWT, in case one reaches an error string outside a cookie: three
