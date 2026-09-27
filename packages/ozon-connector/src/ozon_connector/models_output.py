@@ -100,7 +100,10 @@ class OzonSearchItemOut(BaseModel):
     canonical_path: str | None = Field(default=None, description="Canonical /product/<digits>/ path.")
     card_input: str | None = Field(default=None, description="Input string to pass to ozon_card for full details.")
     title: str | None = Field(default=None, description="Product title.")
-    price: str | None = Field(default=None, description="Display price string.")
+    price: str | None = Field(
+        default=None,
+        description="The tile's big price. Ozon shows the Ozon Card price here; the everyday one is on the card.",
+    )
     price_original: str | None = Field(default=None, description="Strikethrough original price string.")
     rating: str | None = Field(default=None, description="Rating display string.")
     rating_count: int | str | None = Field(default=None, description="Review count (int or display string).")

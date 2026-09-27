@@ -1,0 +1,9 @@
+{
+  "url": "https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2Fproduct%2F4803458585%2F",
+  "captured_at": "2026-09-27",
+  "sha256": "bd4ebe90b263aadccb98b3ca007eeeb3ba742d5bceaaadff7bec98d928c961b0",
+  "method": "captured live on 2026-09-27 19:04 by card(\"ozon\", <first search row>) through the plugin's anonymous Chrome tab (fetch inside ozon.ru); trimmed to the six widgets _parse_widgets reads; every trackingInfo key and cellTrackingInfo.uis value replaced with <redacted>; the full payload stays outside git",
+  "ground_truth": {
+    "note": "sku 4803458585 «Inno3D Видеокарта 12 ГБ (N50702-12D7-195064N)»: price 112 777 ₽, Ozon Card price 106 011 ₽ (the only price the search tile showed, styleType CARD_PRICE), no strikethrough, available, seller М.Видео, no reviews yet («0 отзывов»), five short characteristics (Тип, Объем памяти, Тип памяти, Частота шины памяти, Бренд графического процессора)."
+  }
+}

@@ -710,7 +710,7 @@ async def test_ozon_adapter_reads_the_real_model_fields(monkeypatch):
     assert len(offers) == 1
     got = offers[0]
     assert got.product_id == "123456"
-    assert got.price_rub == 1999.0
+    assert (got.price_rub, got.price_with_subscription_rub) == (None, 1999.0)
     assert got.rating == 4.8
     assert got.rating_count == 24086, "review count was always None before"
     assert got.in_stock is True, "stock was ignored entirely before"

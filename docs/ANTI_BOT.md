@@ -229,7 +229,8 @@ the fetch inside a real browser over the DevTools Protocol. Setup and threat mod
 > документ `www.ozon.ru` отдаёт `403 Antibot Challenge Page`, через ~1 с вкладка сама
 > перезагружается в 200, после этого `fetch` composer-api из вкладки отдаёт поиск.
 > HTTP-уровень у коннектора убран: он всегда получал 307 и 403, то есть лишний отказ
-> перед вкладкой.
+> перед вкладкой. Отказом коннектор считает 401/403/429 из `fetch` и HTML-страницу с
+> кодом 200 там, где должен быть JSON composer: после неё Ozon стоит 30 минут.
 
 Ozon's seller pages were spiked for v1.1.0 and deliberately left out — see
 [the seller-details refusal](#the-ozon-seller-details-refusal-v110).

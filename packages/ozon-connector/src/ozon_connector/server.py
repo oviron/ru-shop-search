@@ -329,9 +329,12 @@ async def _fetch_composer(api_path: str, ctx: Context | None) -> tuple[int, str,
         status, body, tier = (exc.status, str(exc), "cdp_blocked") if exc.status else (0, str(exc), "cdp_failed")
     except Exception as exc:
         return 0, str(exc), "cdp_failed"
+    if status == 200 and body.lstrip().startswith("<"):
+        # An HTML page where composer JSON belongs is the antibot wall answering with 200.
+        status, tier = 403, "cdp_wall"
     if status in _REFUSAL_STATUSES:
-        _pacer.record_refusal(f"http {status}")
-    elif status == 200 and body and not body.lstrip().startswith("<"):
+        _pacer.record_refusal(f"http {status}" if tier != "cdp_wall" else "antibot page instead of JSON")
+    elif status == 200 and body:
         _cache.set(safe_path, (status, body))
     return status, body, tier
 
@@ -982,10 +985,7 @@ def _parse_search_tile(item: Any) -> dict[str, Any]:
             entries = [
                 e for e in raw_price_entries if isinstance(e, dict) and isinstance(e.get("text"), str) and e.get("text")
             ]
-            # Visual order on the page: entries[0] is the current/sale price (big),
-            # entries[1] (if present) is the strikethrough original. textStyle values
-            # vary across categories ("PRICE", "BIG_PRICE", "SALE_PRICE", etc.) so we
-            # rely on order, not on the style label.
+            # entries[0] is the big price, entries[1] the strikethrough original.
             if entries and not price_text:
                 price_text = entries[0].get("text")
             if len(entries) >= 2 and not price_original_text:

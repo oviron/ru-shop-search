@@ -683,7 +683,12 @@ def test_fetch_composer_reports_a_navigation_block(monkeypatch):
 
 @pytest.mark.parametrize(
     "refusal",
-    [(403, "<html>Antibot Challenge Page</html>"), (429, "slow down"), server.NavBlocked(403, "https://www.ozon.ru/")],
+    [
+        (403, "<html>Antibot Challenge Page</html>"),
+        (429, "slow down"),
+        (200, "\n<!DOCTYPE html><title>Antibot Challenge Page</title>"),
+        server.NavBlocked(403, "https://www.ozon.ru/"),
+    ],
 )
 def test_a_refusal_stops_ozon_and_is_not_cached(monkeypatch, refusal):
     calls = _patch_tab(monkeypatch, lambda n: refusal)
@@ -706,3 +711,14 @@ def test_a_dead_browser_does_not_stop_ozon(monkeypatch):
 
     _run(scenario())
     assert calls["n"] == 2
+
+
+def test_an_antibot_page_with_200_is_a_refusal_not_parser_drift(monkeypatch):
+    _patch_tab(monkeypatch, lambda n: (200, "<html>Antibot Challenge Page</html>"))
+
+    with pytest.raises(ToolError) as excinfo:
+        _run(server.ozon_card("123"))
+
+    payload = json.loads(str(excinfo.value))
+    assert payload["status_code"] == 403
+    assert "Ozon is stopped" in payload["message"]

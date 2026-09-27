@@ -40,8 +40,8 @@ class MarketOffer(BaseModel):
     price_with_subscription_rub: float | None = Field(
         default=None,
         description=(
-            "Lower price requiring a paid subscription (Yandex Plus). Excluded from ranking, "
-            "since it is unavailable to non-subscribers."
+            "Lower price needing a subscription or a store card (Yandex Plus, Ozon Card). "
+            "Excluded from ranking, since an anonymous buyer does not get it."
         ),
     )
     rating: float | None = Field(default=None, description="Average rating, 1..5, when reported.")

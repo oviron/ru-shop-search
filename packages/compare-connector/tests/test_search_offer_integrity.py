@@ -86,9 +86,43 @@ async def test_native_ozon_stock_labels_cannot_fabricate_available_winner(monkey
         "6": None,
         "7": True,
     }
-    assert result.cheapest.product_id == "7"
-    assert result.cheapest_comparable.product_id == "7"
-    assert result.cheapest.price_rub == 7000
+    # Ozon search rows carry only the Ozon Card price, so none of them ranks.
+    assert result.cheapest is None
+
+
+async def test_native_ozon_tile_price_rides_aside_whatever_its_style(monkeypatch):
+    # priceV2 of the 2026-09-27 «rtx 5070» search; both tiles showed the Ozon Card price of their cards.
+    def tile(sku, price):
+        return ozon._parse_search_tile(
+            {"sku": sku, "mainState": [{"type": "textAtom", "textAtom": {"text": "RTX 5070"}}, price]}
+        )
+
+    card = {
+        "type": "priceV2",
+        "priceV2": {"price": [{"text": "106 011 ₽", "textStyle": "PRICE"}], "priceStyle": {"styleType": "CARD_PRICE"}},
+    }
+    sale = {
+        "type": "priceV2",
+        "priceV2": {
+            "price": [
+                {"text": "161 249 ₽", "textStyle": "PRICE"},
+                {"text": "412 800 ₽", "textStyle": "ORIGINAL_PRICE"},
+            ],
+            "priceStyle": {"styleType": "SALE_PRICE"},
+        },
+    }
+    native = OzonSearchResponse(items=[tile(4803458585, card), tile(5180676807, sale)])
+
+    async def search(query):
+        return native
+
+    monkeypatch.setattr(server, "SOURCES", {"ozon": SimpleNamespace(ozon_search=search)})
+    result = await server.compare_prices(query="RTX 5070", sources=["ozon"])
+
+    got = {item.product_id: (item.price_rub, item.price_with_subscription_rub) for item in result.offers}
+    assert got == {"4803458585": (None, 106011), "5180676807": (None, 161249)}
+    assert result.cheapest is None
+    assert any(w.startswith("ozon_card_price_only:") for w in result.source_outcomes[0].warnings)
 
 
 @pytest.mark.parametrize("channel", ["textDS", "labelList"])
@@ -121,8 +155,7 @@ async def test_native_ozon_explicit_absence_survives_both_label_channels(monkeyp
     result = await server.compare_prices(query="Kettle", sources=["ozon"], in_stock_only=True)
 
     assert {item.product_id: item.in_stock for item in result.offers} == {"1": False, "2": True}
-    assert result.cheapest.product_id == "2"
-    assert result.cheapest_comparable.product_id == "2"
+    assert result.cheapest is None
 
 
 @pytest.mark.parametrize("with_ware_id", [True, False])

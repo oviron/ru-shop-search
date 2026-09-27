@@ -15,9 +15,10 @@ source is queried in parallel and its outcome reported per-source. A caller can
 always see which marketplaces answered and which did not.
 
 **Subscription prices are never silently compared against everyday prices.**
-Yandex Market leads with a Plus-subscriber price 25-30% below the everyday one.
-Ranking that against a Wildberries price would fabricate a bargain. Comparison
-uses everyday prices; subscriber prices ride along in a separate field.
+Yandex Market leads with a Plus-subscriber price 25-30% below the everyday one,
+and an Ozon search tile shows only the Ozon Card price. Ranking either against
+a Wildberries price would fabricate a bargain. Comparison uses everyday prices;
+subscriber and card prices ride along in a separate field.
 
 **Sources are optional at import time.** Ozon pulls in curl_cffi and Playwright,
 which many users do not want. Each connector is imported defensively, and the
@@ -504,17 +505,9 @@ async def _search_yandex(query: str, limit: int) -> list[MarketOffer]:
 async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``ozon_search`` results.
 
-    This adapter was previously written blind — Ozon refuses datacenter IPs, so it
-    could not be exercised from CI or a sandbox — and it guessed wrong. It read
-    ``price_rub``, ``reviews_count``, ``feedbacks``, ``name``, ``id`` and
-    ``brand``; ``OzonSearchItemOut`` declares none of those. Every one silently
-    resolved to ``None``, so Ozon offers arrived with no review count at all and
-    depended on a fallback key for the price.
-
-    Reading typed attributes makes that class of error a type failure rather than
-    a quiet blank. Ozon reports no brand or seller on a search row, so those stay
-    empty by definition rather than by accident, and ``stock`` — which the old
-    version ignored entirely — now populates ``in_stock``.
+    A search row has no brand, seller or everyday price; ``ozon_card`` has them. The
+    tile price is the Ozon Card one (two tiles checked against their cards on
+    2026-09-27), so it rides aside and the row does not rank.
     """
     server = SOURCES["ozon"]
     response = await server.ozon_search(query=query)
@@ -530,14 +523,21 @@ async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
                 # does. Left empty rather than invented.
                 brand="",
                 seller="",
-                price_rub=_as_price(item.price),
+                price_rub=None,
+                price_with_subscription_rub=_as_price(item.price),
                 rating=_as_price(item.rating),
                 rating_count=_as_count(item.rating_count),
                 in_stock=_stock_from_label(item.stock),
                 url=item.url or "",
             )
         )
-    return OfferBatch(offers, response)
+    batch = OfferBatch(offers, response)
+    if any(offer.price_with_subscription_rub is not None for offer in offers):
+        batch.warnings.append(
+            "ozon_card_price_only: search rows show the Ozon Card price, which does not rank; "
+            "card('ozon', url) gives the everyday price"
+        )
+    return batch
 
 
 async def _search_avito(query: str, limit: int) -> list[MarketOffer]:
@@ -833,9 +833,9 @@ async def compare_prices(
 
     Two things to read carefully in the output:
 
-    - `cheapest` is chosen on everyday prices. Yandex Market's subscriber price
-      appears as `price_with_subscription_rub` and is deliberately excluded from
-      ranking, since it requires a paid Yandex Plus subscription.
+    - `cheapest` is chosen on everyday prices. Yandex Market's Plus price and the
+      Ozon Card price appear as `price_with_subscription_rub` and are excluded from
+      ranking, since an anonymous buyer does not get them.
     - `source_outcomes` shows which marketplaces answered. A blocked or timed-out
       source means the comparison is partial, not that the product is absent
       there — `complete` tells you which case you are in.
@@ -1241,7 +1241,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             )
             if "detsky_mir" in SOURCES
             else ("deselected by MARKETPLACE_SOURCES" if "detsky_mir" in deselected else "not installed"),
-            "ozon": ("requires curl_cffi and, when Cloudflare challenges, a logged-in Chrome on the CDP port"),
+            "ozon": (
+                "search through the plugin's Chrome tab; a search row carries only the Ozon Card "
+                "price and does not rank, the everyday price comes from card"
+            ),
             "yandex_market": "reports both an everyday price and a Plus-subscriber price",
             "lamoda": "search through the operator's Chrome; cards via anonymous GraphQL",
             "dns": "reachable only through the operator's Chrome (Qrator)",
