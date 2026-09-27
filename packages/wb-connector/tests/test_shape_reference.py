@@ -28,7 +28,7 @@ SEARCH_GOLDEN = [
 
 
 def test_search_normalization_matches_shape_golden() -> None:
-    payload = json.loads((FIXTURES / "search_v9_live.json").read_text(encoding="utf-8"))
+    payload = json.loads((FIXTURES / "search_v18_live.json").read_text(encoding="utf-8"))
     normalized = [server._card_item_dict(item) for item in payload["products"]]
 
     assert shape_signature({"products": normalized}) == SEARCH_GOLDEN

@@ -39,7 +39,10 @@ class WbCardItem(BaseModel):
             "'quantity not reported' — read total_quantity is None to tell an unknown from a sell-out."
         ),
     )
-    price_rub: float | None = Field(default=None, description="Current price in rubles.")
+    price_rub: float | None = Field(
+        default=None,
+        description="Price in rubles the site shows an anonymous buyer; not a personal WB Wallet price.",
+    )
     price_original_rub: float | None = Field(default=None, description="Strikethrough original price in rubles.")
 
 
@@ -113,7 +116,7 @@ class WbSearchResponse(BaseModel):
     query: str = Field(default="", description="Search query text.")
     page: int = Field(default=1, description="Search page number.")
     page_size: int = Field(default=30, description="Items per page.")
-    total_ids: int = Field(default=0, description="Total ids returned by search-goods.")
+    total_ids: int = Field(default=0, description="Total matches WB reports for the query.")
     count: int = Field(default=0, description="Number of enriched items on this page.")
     items: list[WbCardItem] = Field(default_factory=list, description="Enriched product card items.")
     meta: MetaOut = Field(default_factory=MetaOut, description="Validation metadata.")
@@ -144,7 +147,7 @@ class WbNoResultsResponse(BaseModel):
     status: str = Field(default="no_results", description="Response status: no_results (not an error).")
     query: str = Field(default="", description="Search query text.")
     page: int | None = Field(default=None, description="Search page number if applicable.")
-    total_ids: int | None = Field(default=None, description="Total ids from search-goods if applicable.")
+    total_ids: int | None = Field(default=None, description="Total matches WB reports for the query, if any.")
 
 
 class WbSelfCheckEntry(SelfCheckEntryBase):

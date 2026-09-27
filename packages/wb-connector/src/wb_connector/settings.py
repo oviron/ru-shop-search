@@ -2,19 +2,20 @@
 
 All tunable parameters are configurable via environment variables with a WB_
 prefix, e.g. WB_TIMEOUT, WB_WALL_TIMEOUT, WB_MIN_GAP, WB_DEFAULT_DEST,
-WB_MAX_BODY_BYTES, WB_NET_RETRIES, WB_NET_BACKOFF_S, WB_CACHE_TTL, WB_PROXY.
+WB_REGION, WB_MAX_BODY_BYTES, WB_NET_RETRIES, WB_NET_BACKOFF_S, WB_CACHE_TTL, WB_PROXY.
 
-WB public catalog APIs need no credentials, so this settings object holds only
-operational knobs — timeouts, rate-limit gap, retry budget, body-size cap, cache
-TTL, and proxy.
+Operational knobs only. The search token is not a setting: it is minted by the
+plugin's Chrome profile and cached in ``${CLAUDE_PLUGIN_DATA}`` (``wb_connector.session``).
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from wb_connector.regions import WB_REGIONS
 
 
 class WBSettings(BaseSettings):
@@ -43,7 +44,11 @@ class WBSettings(BaseSettings):
     )
     default_dest: str = Field(
         default="-1257786",
-        description="Default WB region ID. -1257786 = Moscow. Required for valid prices/stocks.",
+        description="Default WB region ID when WB_REGION is empty. -1257786 = Moscow, as the site itself sends it.",
+    )
+    region: str = Field(
+        default="",
+        description="City name from wb_connector.regions.WB_REGIONS; overrides default_dest when set.",
     )
     max_body_bytes: int = Field(
         default=52428800,
@@ -80,6 +85,17 @@ class WBSettings(BaseSettings):
         pattern=r"^basket-\d+$",
         description="Fallback basket host prefix when SKU vol is not in the lookup table. Must match 'basket-N' pattern.",
     )
+
+    @field_validator("region")
+    @classmethod
+    def _known_region(cls, value: str) -> str:
+        value = value.strip()
+        if value and value not in WB_REGIONS:
+            raise ValueError(f"unknown WB_REGION {value!r}; known: {', '.join(WB_REGIONS)}")
+        return value
+
+    def dest(self) -> str:
+        return str(WB_REGIONS[self.region]) if self.region else self.default_dest
 
 
 @lru_cache(maxsize=1)

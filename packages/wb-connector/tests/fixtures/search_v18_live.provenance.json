@@ -1,0 +1,10 @@
+{
+  "url": "https://www.wildberries.ru/__internal/u-search/exactmatch/ru/common/v18/search?appType=1&curr=rub&dest=-1257786&lang=ru&locale=ru&query=rtx+5070&resultset=catalog&sort=popular&spp=30",
+  "captured_at": "2026-09-27",
+  "sha256": "873e940540c86ad0fd6acca085d484b1ac4b53c7dc9f096d6fa19fa3a96f170f",
+  "method": "body of the plugin's own live search (marketplace search, shops=[wildberries]) read back from the connector cache, no extra request; sha256 pins this trimmed file; raw_sha256 is the full raw body, kept outside git. Trimmed to the first three of 100 products; opaque blobs that may carry session or address data (metadata.qv, metadata.kcl, products[].logs, sizes[].payload) replaced with <redacted>. The request's token cookie and deviceid header are not part of the body.",
+  "ground_truth": {
+    "note": "first three products as parsed by _card_item_dict at capture time: nm 355329855 MSI 101 812 ₽ was 142 995 ₽ qty 24; nm 370245679 Gigabyte 101 033 ₽ was 141 901 ₽ qty 37; nm 445317378 Gigabyte white 92 104 ₽ was 264 000 ₽ qty 1. A probe the same hour gave nm 355329855 the same product price on card.wb.ru v4, and identical prices with spp=0 and spp=30."
+  },
+  "raw_sha256": "e524d980cbf4802c48ccc6b6b1fb0e64083a8048b2f74e207a9c532ef654aec1"
+}

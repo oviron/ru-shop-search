@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastmcp.exceptions import ToolError
+from mcp_core import stopgate
 from mcp_core.cache import TTLCache
 from pydantic import SecretStr
 from wb_connector import server
@@ -29,49 +30,6 @@ def test_basket_for_sku_uses_expected_boundaries():
     assert server._basket_for_sku(14_300_000) == "basket-01.wbbasket.ru"
     assert server._basket_for_sku(14_400_000) == "basket-02.wbbasket.ru"
     assert server._basket_for_sku(500_000_000) == "basket-28.wbbasket.ru"
-
-
-def test_recover_search_ids_accepts_live_shapes():
-    assert server._recover_search_ids(
-        [
-            123,
-            " 456 ",
-            {"id": "789"},
-            {"nmId": 101112},
-            {"nm_id": "131415"},
-        ]
-    ) == [123, 456, 789, 101112, 131415]
-
-
-def test_recover_search_ids_skips_invalid_and_boolean_values():
-    assert (
-        server._recover_search_ids(
-            [
-                True,
-                False,
-                0,
-                -1,
-                "0",
-                "-2",
-                "+0",
-                "",
-                "abc",
-                {"id": False},
-                {"id": 0},
-                {"id": "-3"},
-                {"nmId": "+0"},
-                {"id": "42x"},
-                {"other": 7},
-                None,
-            ]
-        )
-        == []
-    )
-
-
-def test_recover_search_ids_rejects_non_lists():
-    assert server._recover_search_ids(None) == []
-    assert server._recover_search_ids({"id": 1}) == []
 
 
 def test_wb_card_rejects_non_positive_nm_ids_before_network(monkeypatch):
@@ -456,196 +414,12 @@ def test_wb_reviews_reports_all_review_host_failures(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_wb_search_reads_products_straight_from_v9(monkeypatch):
-    """v9 returns fully-populated products, so one request is enough.
-
-    The old two-step path (search-goods ids -> card/v4) served stale ids: for a
-    query whose v9 results were all in stock, every id it returned was a delisted
-    SKU with no price. v9 is now primary.
-    """
-    calls = []
-
-    async def fake_safe_get_text(client, url):
-        calls.append(url)
-        return (
-            200,
-            json.dumps(
-                {
-                    "total": 42,
-                    "products": [
-                        {
-                            "id": 123,
-                            "name": "x",
-                            "brand": "b",
-                            "supplier": "s",
-                            "totalQuantity": 57,
-                            "sizes": [{"price": {"basic": 200000, "product": 150000}}],
-                        }
-                    ],
-                }
-            ),
-            None,
-        )
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data["count"] == 1
-        assert data["items"][0]["nm_id"] == 123
-        assert data["items"][0]["price_rub"] == 1500.0
-        assert data["items"][0]["in_stock"] is True
-        assert data["total_ids"] == 42
-        # A single upstream call: no card/v4 enrichment round-trip.
-        assert len(calls) == 1
-        assert "v9/search" in calls[0]
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_falls_back_to_legacy_path_when_v9_fails(monkeypatch):
-    """A stale result beats no result — but the caller must be told."""
-    calls = []
-
-    async def fake_safe_get_text(client, url):
-        calls.append(url)
-        if "v9/search" in url:
-            return 503, "", None
-        if "search-goods" in url:
-            return 200, json.dumps([{"nmId": "123"}]), None
-        return (
-            200,
-            json.dumps({"products": [{"id": 123, "name": "x", "brand": "b", "sizes": [], "totalQuantity": 0}]}),
-            None,
-        )
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data["count"] == 1
-        assert data["items"][0]["nm_id"] == 123
-        assert any("fallback" in w for w in data["meta"]["warnings"])
-        assert data["meta"]["healthy"] is False
-        assert any("search-goods" in c for c in calls)
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_warns_when_no_result_has_a_price(monkeypatch):
-    """A page of delisted items is worse than an error if it looks like an answer."""
-
-    async def fake_safe_get_text(client, url):
-        return (
-            200,
-            json.dumps(
-                {
-                    "total": 5,
-                    "products": [
-                        {"id": 1, "name": "dead", "brand": "b", "sizes": [{"price": None}], "totalQuantity": 0}
-                    ],
-                }
-            ),
-            None,
-        )
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data["items"][0]["price_rub"] is None
-        assert any("no_prices" in w for w in data["meta"]["warnings"])
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_rate_limit_is_surfaced_not_masked_by_fallback(monkeypatch):
-    """A 429 from v9 must raise, not silently degrade to the stale-id path."""
-
-    async def fake_safe_get_text(client, url):
-        if "v9/search" in url:
-            return 429, "", None
-        raise AssertionError("a 429 must not trigger the fallback")
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        with pytest.raises(ToolError) as excinfo:
-            await server.wb_search("x")
-        payload = _tool_error_payload(excinfo)
-        assert payload["error"] == "rate_limited"
-        assert payload["retryable"] is True
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_returns_no_results_when_both_paths_are_empty(monkeypatch):
-    """Unrecoverable ids used to be parser_drift; with v9 primary they mean 'nothing'.
-
-    v9 answering with an empty product list and the fallback yielding no usable
-    ids is a legitimate no-results answer, not a broken parser.
-    """
-
-    async def fake_safe_get_text(client, url):
-        if "v9/search" in url:
-            return 200, json.dumps({"products": [], "total": 0}), None
-        return 200, json.dumps([True, {"id": "²"}]), None
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data.get("count", 0) == 0 or data.get("items") in (None, [])
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_empty_ids_returns_no_results_not_error(monkeypatch):
-    async def fake_safe_get_text(client, url):
-        return 200, json.dumps([]), None
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("zzz")
-        assert isinstance(result, server.WbNoResultsResponse)
-        data = result.model_dump()
-        assert data["status"] == "no_results"
-        assert data["query"] == "zzz"
-
-    asyncio.run(scenario())
-
-
 def test_wb_selfcheck_card_missing_products_container_is_drift(monkeypatch):
     async def fake_safe_get_text(client, url):
         if "card.wb.ru" in url:
             return 200, json.dumps({"data": {}}), None
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -689,8 +463,6 @@ def test_wb_selfcheck_reviews_uses_feedbacks_fallback_host(monkeypatch):
             return 0, None, "timeout: feedbacks2"
         if "feedbacks1.wb.ru" in url:
             return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -717,71 +489,6 @@ def test_wb_selfcheck_reviews_uses_feedbacks_fallback_host(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_wb_search_handles_v9_shape_drift_by_falling_back(monkeypatch):
-    """If v9's response shape moves, the legacy path still answers."""
-    calls = []
-
-    async def fake_safe_get_text(client, url):
-        calls.append(url)
-        if "v9/search" in url:
-            return 200, json.dumps({"unexpected": "shape"}), None
-        if "search-goods" in url:
-            return 200, json.dumps([123]), None
-        return (
-            200,
-            json.dumps({"products": [{"id": 123, "name": "y", "brand": "b", "sizes": [], "totalQuantity": 0}]}),
-            None,
-        )
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data["count"] == 1
-        assert any("fallback" in w for w in data["meta"]["warnings"])
-
-    asyncio.run(scenario())
-
-
-def test_wb_search_string_zero_quantity_is_not_in_stock(monkeypatch):
-    async def fake_safe_get_text(client, url):
-        if "search-goods" in url:
-            return 200, json.dumps([123]), None
-        return (
-            200,
-            json.dumps(
-                {
-                    "products": [
-                        {
-                            "id": 123,
-                            "name": "x",
-                            "brand": "b",
-                            "sizes": [{"price": {"product": 10000, "basic": 12000}}],
-                            "totalQuantity": "0",
-                        }
-                    ]
-                }
-            ),
-            None,
-        )
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_search("x")
-        data = result.model_dump()
-        assert data["items"][0]["in_stock"] is False
-
-    asyncio.run(scenario())
-
-
 def test_wb_selfcheck_card_missing_total_quantity_is_drift(monkeypatch):
     async def fake_safe_get_text(client, url):
         if "card.wb.ru" in url:
@@ -804,8 +511,6 @@ def test_wb_selfcheck_card_missing_total_quantity_is_drift(monkeypatch):
             )
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -847,8 +552,6 @@ def test_wb_selfcheck_reviews_missing_feedbacks_is_drift(monkeypatch):
             )
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -901,8 +604,6 @@ def test_wb_selfcheck_reviews_rating_can_appear_after_malformed_first_entry(monk
                 ),
                 None,
             )
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -952,10 +653,6 @@ def test_wb_selfcheck_null_roots_are_drift(monkeypatch):
                 if marker == "reviews":
                     return 200, "null", None
                 return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-            if "search-goods.wildberries.ru" in url:
-                if marker == "search_goods":
-                    return 200, "null", None
-                return 200, json.dumps([server._SELFCHECK_NM]), None
             if "wbbasket.ru" in url:
                 return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
             return 500, "", "unexpected url"
@@ -968,7 +665,6 @@ def test_wb_selfcheck_null_roots_are_drift(monkeypatch):
 
     asyncio.run(run_case("card"))
     asyncio.run(run_case("reviews"))
-    asyncio.run(run_case("search_goods"))
 
 
 def test_wb_selfcheck_reviews_200_invalid_json_is_drift(monkeypatch):
@@ -994,8 +690,6 @@ def test_wb_selfcheck_reviews_200_invalid_json_is_drift(monkeypatch):
             )
         if "feedbacks2.wb.ru" in url:
             return 200, "{not-json", None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -1014,99 +708,12 @@ def test_wb_selfcheck_reviews_200_invalid_json_is_drift(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_wb_selfcheck_search_goods_200_invalid_json_is_drift(monkeypatch):
-    async def fake_safe_get_text(client, url):
-        if "card.wb.ru" in url:
-            return (
-                200,
-                json.dumps(
-                    {
-                        "products": [
-                            {
-                                "id": server._SELFCHECK_NM,
-                                "name": "x",
-                                "sizes": [{"price": {"product": 10000, "basic": 12000}}],
-                                "reviewRating": 4.5,
-                                "feedbacks": 1,
-                                "totalQuantity": 1,
-                            }
-                        ]
-                    }
-                ),
-                None,
-            )
-        if "feedbacks2.wb.ru" in url:
-            return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, "{not-json", None
-        if "wbbasket.ru" in url:
-            return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
-        return 500, "", "unexpected url"
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_selfcheck()
-        data = result.model_dump()
-        assert data["checks"]["search_goods"]["state"] == "drift"
-        assert data["checks"]["search_goods"]["reason"] == "parse_error"
-
-    asyncio.run(scenario())
-
-
-def test_wb_selfcheck_search_goods_nonpositive_ids_are_drift(monkeypatch):
-    async def fake_safe_get_text(client, url):
-        if "card.wb.ru" in url:
-            return (
-                200,
-                json.dumps(
-                    {
-                        "products": [
-                            {
-                                "id": server._SELFCHECK_NM,
-                                "name": "x",
-                                "sizes": [{"price": {"product": 10000, "basic": 12000}}],
-                                "reviewRating": 4.5,
-                                "feedbacks": 1,
-                                "totalQuantity": 1,
-                            }
-                        ]
-                    }
-                ),
-                None,
-            )
-        if "feedbacks2.wb.ru" in url:
-            return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([0, "-1", {"id": "+0"}]), None
-        if "wbbasket.ru" in url:
-            return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
-        return 500, "", "unexpected url"
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", fake_safe_get_text)
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        result = await server.wb_selfcheck()
-        data = result.model_dump()
-        assert data["checks"]["search_goods"]["state"] == "drift"
-
-    asyncio.run(scenario())
-
-
 def test_wb_selfcheck_card_product_non_object_is_drift(monkeypatch):
     async def fake_safe_get_text(client, url):
         if "card.wb.ru" in url:
             return 200, json.dumps({"products": [None]}), None
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -1148,8 +755,6 @@ def test_wb_selfcheck_feedbacks_non_list_is_drift(monkeypatch):
             )
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({"feedbacks": {"bad": "shape"}}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -1191,8 +796,6 @@ def test_wb_selfcheck_rich_text_feedback_body_is_drift(monkeypatch):
             )
         if "feedbacks2.wb.ru" in url:
             return 200, json.dumps({"feedbacks": [{"text": {"rich": "object"}, "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
         if "wbbasket.ru" in url:
             return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
         return 500, "", "unexpected url"
@@ -1334,6 +937,7 @@ def test_cache_does_not_remember_a_rate_limit(monkeypatch):
         monkeypatch.setattr(server, "_polite_wait", no_wait)
         url = "https://ratelimited.test/a"
         assert (await server._safe_get_text(FakeClient(), url))[0] == 429
+        stopgate.default_gate().clear("wildberries")  # the 30-minute stop has passed
         assert (await server._safe_get_text(FakeClient(), url))[0] == 429
         assert calls["n"] == 2, "a 429 must never be served from cache"
 
@@ -1934,15 +1538,12 @@ def test_known_quantities_produce_no_stock_warning():
 
 # --- WB's TLS-fingerprint gate ------------------------------------------------
 #
-# card.wb.ru, search.wb.ru and catalog.wb.ru answer httpx's handshake with a 403
-# HTML page while serving curl_cffi a 200 for the identical URL. These pin which
-# hosts take which transport, because getting the split wrong is silent: a gated
-# host on httpx makes wb_card fail outright and wb_search degrade to the stale
-# legacy ids, which look like an answer.
+# card.wb.ru and catalog.wb.ru have answered httpx's handshake with a 403 HTML page
+# while serving curl_cffi a 200 for the identical URL. These pin which hosts take
+# which transport: a gated host on httpx makes wb_card fail outright.
 
 _GATED_URLS = {
     "card": "https://card.wb.ru/cards/v4/detail?appType=1&curr=rub&dest=-1257786&locale=ru&nm=5535522",
-    "search": "https://search.wb.ru/exactmatch/ru/common/v9/search?appType=1&query=x&resultset=catalog",
     "catalog": "https://catalog.wb.ru/catalog/electronic17/v4/catalog?appType=1&subject=515",
 }
 
@@ -1950,7 +1551,6 @@ _UNGATED_URLS = {
     # Same apex as the gated hosts and deliberately NOT impersonated: the split is
     # a host list, not a suffix rule, and this is the case that proves it.
     "feedbacks": "https://feedbacks2.wb.ru/feedbacks/v2/1002173489",
-    "search_goods": "https://search-goods.wildberries.ru/search?query=x&dest=-1257786",
     "basket": "https://basket-01.wbbasket.ru/vol55/part5535/5535522/info/ru/card.json",
 }
 
@@ -2102,11 +1702,14 @@ class _RecordingPacer:
         self.events: list[str] = []
         self._hint = hint
 
-    def record_refusal(self) -> None:
+    def record_refusal(self, reason: str = "refused") -> None:
         self.events.append("refusal")
 
     def record_success(self) -> None:
         self.events.append("success")
+
+    def check_stopped(self) -> None:
+        return None
 
     def rotation_hint(self) -> str:
         return self._hint
@@ -2189,78 +1792,6 @@ def test_a_refusal_streak_reaches_the_operator(monkeypatch):
     _clear_wb_cache()
 
 
-def _healthy_selfcheck_responder(v9_response):
-    """Every canary probe healthy except v9, which answers with ``v9_response``."""
-
-    async def responder(client, url):
-        if "card.wb.ru" in url:
-            return (
-                200,
-                json.dumps(
-                    {
-                        "products": [
-                            {
-                                "id": server._SELFCHECK_NM,
-                                "name": "x",
-                                "sizes": [{"price": {"product": 10000, "basic": 12000}}],
-                                "reviewRating": 4.5,
-                                "feedbacks": 1,
-                                "totalQuantity": 1,
-                            }
-                        ]
-                    }
-                ),
-                None,
-            )
-        if "feedbacks2.wb.ru" in url:
-            return 200, json.dumps({"feedbacks": [{"text": "ok", "productValuation": 5}]}), None
-        if "search-goods.wildberries.ru" in url:
-            return 200, json.dumps([server._SELFCHECK_NM]), None
-        if "search.wb.ru" in url:
-            return v9_response
-        if "wbbasket.ru" in url:
-            return 200, json.dumps({"imt_id": server._SELFCHECK_IMT}), None
-        return 500, "", "unexpected url"
-
-    return responder
-
-
-@pytest.mark.parametrize(
-    ("v9_response", "expected_state"),
-    [
-        ((403, "", None), "inconclusive"),
-        ((429, "", None), "inconclusive"),
-        ((0, None, "timeout: no response within 15s"), "inconclusive"),
-        ((200, "not json", None), "drift"),
-        ((200, json.dumps({"products": []}), None), "drift"),
-        ((200, json.dumps({"products": [{"name": "x"}]}), None), "drift"),
-        ((200, json.dumps({"products": [{"id": 1, "salePriceU": 1000}]}), None), "healthy"),
-    ],
-)
-def test_the_canary_sees_the_primary_search_path(monkeypatch, v9_response, expected_state):
-    """A refused v9 must show up: the fallback used to answer in its place.
-
-    When v9 was refused, wb_search fell through to the legacy id list and
-    returned unrelated products with prices attached, while this canary stayed
-    green because its other probe reads search-goods and never touched v9.
-    """
-
-    async def no_wait():
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(server, "_safe_get_text", _healthy_selfcheck_responder(v9_response))
-        monkeypatch.setattr(server, "_polite_wait", no_wait)
-        data = (await server.wb_selfcheck()).model_dump()
-        assert data["checks"]["search_v9"]["state"] == expected_state
-        return data
-
-    data = asyncio.run(scenario())
-    if expected_state == "inconclusive" and v9_response[0] in (401, 403, 429):
-        notes = " ".join(data["checks"]["search_v9"]["notes"])
-        assert "primary search path" in notes, "an operator must be able to see WHICH path was refused"
-
-
 def test_an_edge_wall_is_not_a_success_and_is_not_cached(monkeypatch):
     """A wall served with HTTP 200 is a refusal, and must never reach the cache.
 
@@ -2287,32 +1818,26 @@ def test_an_edge_wall_is_not_a_success_and_is_not_cached(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("impersonated_result", "budgeted_result", "expected"),
+    ("impersonated_result", "expected", "budgeted_calls"),
     [
-        # impersonation produced no status at all -> the fallback answers
-        ((0, None, "timeout: no response within 15.0s"), (200, "body", None), (200, "body", None)),
-        # impersonation got a wall page with HTTP 200 -> not a read, fall back
-        ((200, "<html>wall</html>", None), (200, "body", None), (200, "body", None)),
-        # impersonation got a real status, the fallback got nothing -> keep the status
-        ((403, "<html>wall</html>", None), (0, None, "timeout: x"), (403, "<html>wall</html>", None)),
-        # both refused -> the refusal is reported, not swallowed
-        ((403, "<html>wall</html>", None), (403, "<html>wall</html>", None), (403, "<html>wall</html>", None)),
+        ((0, None, "timeout: no response within 15.0s"), (200, "body", None), 1),
+        ((200, "<html>wall</html>", None), (200, "<html>wall</html>", None), 0),
+        ((403, "<html>wall</html>", None), (403, "<html>wall</html>", None), 0),
+        ((429, "", None), (429, "", None), 0),
     ],
 )
-def test_a_gated_host_falls_back_when_impersonation_fails(monkeypatch, impersonated_result, budgeted_result, expected):
-    """Preferring impersonation must not mean depending on it.
-
-    Measured on 2026-09-21: from one address the impersonated path timed out on
-    the primary search endpoint while the shared client answered it with 130 KB,
-    and from the next address card.wb.ru refused both. A host list cannot encode
-    that, so the gated hosts try impersonation and then fall back once.
-    """
+def test_a_gated_host_falls_back_only_when_impersonation_got_no_status(
+    monkeypatch, impersonated_result, expected, budgeted_calls
+):
+    """Any status is WB's answer; a second request after a refusal is a retry, and retries are banned."""
+    calls = []
 
     async def fake_impersonated(url):
         return impersonated_result
 
     async def fake_budgeted(client, target, **kwargs):
-        return budgeted_result
+        calls.append(target)
+        return 200, "body", None
 
     async def scenario():
         _clear_wb_cache()
@@ -2320,13 +1845,14 @@ def test_a_gated_host_falls_back_when_impersonation_fails(monkeypatch, impersona
         monkeypatch.setattr(server, "get_text_budgeted", fake_budgeted)
         result = await server._safe_get_text(object(), _GATED_URLS["card"])
         assert result == expected
+        assert len(calls) == budgeted_calls
 
     asyncio.run(scenario())
     _clear_wb_cache()
 
 
 def test_a_canary_probe_cannot_be_answered_from_its_own_cache(monkeypatch):
-    """`search_v9: healthy` must describe a read that just happened.
+    """`card: healthy` must describe a read that just happened.
 
     Every probe uses a fixed URL, and a cached 200 was observed satisfying a probe
     while a live request to the same endpoint was timing out.

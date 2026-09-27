@@ -2268,8 +2268,10 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "mcp-core" },
+    { name = "playwright" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -2278,8 +2280,10 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.6,<4" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "playwright", specifier = ">=1.47" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
+    { name = "websockets", specifier = ">=17.0.1" },
 ]
 
 [[package]]

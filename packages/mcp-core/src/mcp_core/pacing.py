@@ -101,8 +101,7 @@ class Pacer:
         their module-level value so an operator (or a test) can retune the pace
         at runtime without rebuilding the pacer.
         """
-        if self.source is not None:
-            self._stop_gate().check(self.source)
+        self.check_stopped()
         gap = self.min_gap if min_gap is None else max(0.0, float(min_gap))
         if self._penalised:
             gap = max(gap, self.error_delay) * (1.0 + self.jitter * self._random())
@@ -110,10 +109,14 @@ class Pacer:
             elapsed = self._clock() - self._last_request_at
             if elapsed < gap:
                 await self._sleep(gap - elapsed)
-                if self.source is not None:
-                    self._stop_gate().check(self.source)
+                self.check_stopped()
             self._last_request_at = self._clock()
             self._penalised = False
+
+    def check_stopped(self) -> None:
+        """Raise ``SourceStoppedError`` when this source is stopped; for requests that skip ``wait``."""
+        if self.source is not None:
+            self._stop_gate().check(self.source)
 
     def record_success(self) -> None:
         """A request came back with data. Forget the refusals before it."""

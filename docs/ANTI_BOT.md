@@ -22,7 +22,7 @@ inside a real browser.
 
 | Marketplace | Datacenter IP | Anti-bot | In release |
 |---|---|---|---|
-| Wildberries | ✅ works | none observed | ✅ |
+| Wildberries | карточка ✅, поиск ❌ 403 | `wbaas`: поиск только с токеном из браузера | ✅ токен из твоего Chrome |
 | Yandex Market | ✅ works | SmartCaptcha (dormant) | ✅ |
 | Detsky Mir | ✅ works | none | ✅ |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
@@ -128,22 +128,24 @@ Ozon, наоборот, здоров с домашнего российског�
 
 ## Shipped sources
 
-### Wildberries — no resistance
+### Wildberries — карточка открыта, поиск за токеном
 
-All three endpoint families answer plain HTTPS with browser-like headers:
-`card.wb.ru/cards/v4/detail`, `feedbacks2.wb.ru`, `search.wb.ru` v9.
+Проверено 2026-09-27 с домашнего IP.
 
-Two quirks worth knowing:
-
-- **`dest` is mandatory.** Without it you get empty stocks, wrong prices, or
-  Cloudflare HTML. Default is `-1257786` (Moscow).
-- **Search is 429-prone.** Repeated queries hit a rate limit within a handful of
-  requests. It clears in a minute or two. The connector surfaces it as a retryable
-  error rather than degrading silently.
-
-The real trap here was not anti-bot but a **stale index**:
-`search-goods.wildberries.ru` returns ids for delisted SKUs. See
-[the search fix](#the-wildberries-search-trap).
+- Карточка `card.wb.ru/cards/v4/detail`, отзывы `feedbacks2.wb.ru` и basket-хосты
+  отвечают обычному HTTP без токена.
+- Поиск v9 `search.wb.ru` и v18 `www.wildberries.ru/__internal/u-search/...` без токена
+  отвечают 403 от `wbaas`. Для стоп-правила это отказ, поэтому v9 из коннектора убран.
+- v18 пускает с кукой `x_wbaas_token` и заголовком `deviceid: site_<32 hex>`. Куку
+  ставит сам сайт: вкладка профиля открывает `www.wildberries.ru`, через 2–3 с кука
+  появляется. Коннектор читает её и `navigator.userAgent`, дальше ходит через
+  `curl_cffi` и хранит всё в `${CLAUDE_PLUGIN_DATA}/wb_session.json` (права 600) 30 ч.
+  Токен живёт 36 ч; 498 значит «токен истёк», тогда он перевыпускается один раз.
+- `dest` обязателен: без него цены и остатки неверные. По умолчанию `-1257786`, как
+  шлёт сам сайт для Москвы; `WB_REGION=<город>` берёт код из снимка krein15
+  (`wb_connector.regions`).
+- `spp=30` сайт шлёт анонимному покупателю. 2026-09-27 цены с `spp=0` и `spp=30`
+  совпали. Это не персональная цена с WB Кошельком, и выдавать её за такую нельзя.
 
 Two more endpoints were verified live for v1.1.0, each with a silent-failure mode
 worth knowing:
@@ -394,27 +396,11 @@ infrastructure tooling, not a catalog client.
 
 ### The Wildberries search trap
 
-`wb_search` originally resolved ids through `search-goods.wildberries.ru`, then
-enriched them via `card/v4`. Both endpoints returned HTTP 200 and valid JSON, so
-the pipeline looked healthy.
-
-Live check on `"кроссовки мужские"`:
-
-| Path | Products | With a price |
-|---|---|---|
-| `search-goods` → `card/v4` | 19 | **1** |
-| `search.wb.ru` v9 direct | 100 | **100** |
-
-Every id from `search-goods` was a delisted SKU: `totalQuantity: 0`,
-`sizes[].price: null`, zero stock entries. The endpoint serves a stale index.
-
-This is the worst failure mode in the project's problem space — **not an error, but
-a confident answer with no prices in it.** An error is diagnosable; a plausible
-empty result reads as "this product has no offers".
-
-Fix: v9 is now the primary path (one request, prices inline), the old path survives
-as a fallback that flags itself in `meta.warnings`, and a page with no prices at all
-raises a `no_prices` warning rather than passing silently.
+`search-goods.wildberries.ru` отдаёт id снятых с продажи товаров: в июле 2026 на
+«кроссовки мужские» из 19 карточек цена была у одной, а поиск v9 дал 100 товаров, все с
+ценой. Ответ 200 без цен хуже ошибки: он читается как «предложений нет». Поэтому
+`search-goods` из коннектора убран совсем, а страница, где ни у одного товара нет цены,
+получает предупреждение `no_prices`.
 
 ### The Detsky Mir search trap
 

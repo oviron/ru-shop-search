@@ -1,0 +1,297 @@
+{
+ "metadata": {
+  "catalog_type": "preset",
+  "catalog_value": "preset=603479279",
+  "normquery": "rtx 5070",
+  "search_result": {},
+  "name": "rtx 5070",
+  "rmi": "1",
+  "title": "rtx 5070",
+  "rs": 100,
+  "context": [
+   "uv_reranking",
+   "comparison",
+   "ai_chat"
+  ],
+  "qv": "<redacted>",
+  "snippet": "charcs",
+  "kcl": "<redacted>",
+  "preset_normquery_map": {
+   "603479279": "rtx 5070"
+  }
+ },
+ "products": [
+  {
+   "id": 355329855,
+   "__sort": 1183258,
+   "ksort": 0,
+   "root": 440248340,
+   "kindId": 0,
+   "brand": "MSI",
+   "brandId": 27445,
+   "siteBrandId": 0,
+   "colors": [],
+   "subjectId": 3274,
+   "subjectParentId": 6238,
+   "semanticId": [
+    90,
+    65,
+    23,
+    114,
+    119,
+    657,
+    144
+   ],
+   "name": "Видеокарта RTX 5070 12 ГБ SHADOW 2X OC",
+   "entity": "",
+   "matchId": 210030031,
+   "supplier": "Modern Device",
+   "supplierId": 768659,
+   "supplierRating": 4.9,
+   "supplierFlags": 12240,
+   "pics": 13,
+   "picsUpdate": 0,
+   "rating": 5,
+   "reviewRating": 4.9,
+   "feedbacks": 209,
+   "panelPromoId": 1056340,
+   "volume": 122,
+   "weight": 1.11,
+   "viewFlags": 135688280,
+   "mtype": 1029,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 523949581,
+     "wh": 208782,
+     "time1": 15,
+     "time2": 29,
+     "dtype": 6614249635841,
+     "ndtype": 197121,
+     "price": {
+      "basic": 14299500,
+      "product": 10181200,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0,
+      "wallet": 0
+     },
+     "saleConditions": 2281701376,
+     "payload": "<redacted>"
+    }
+   ],
+   "totalQuantity": 24,
+   "time1": 15,
+   "time2": 29,
+   "wh": 208782,
+   "dtype": 6614249635841,
+   "ndtype": 197121,
+   "dtypeMask": 1,
+   "dist": 57,
+   "logs": "<redacted>",
+   "meta": {
+    "tokens": [],
+    "characteristics": [
+     {
+      "name": "Тип видеопамяти",
+      "values": [
+       "GDDR7"
+      ]
+     },
+     {
+      "name": "Частота графического процессора",
+      "values": [
+       "2542 МГц"
+      ]
+     }
+    ],
+    "presetId": 603479279
+   }
+  },
+  {
+   "id": 370245679,
+   "__sort": 1179719,
+   "ksort": 0,
+   "root": 440246507,
+   "kindId": 0,
+   "brand": "Gigabyte",
+   "brandId": 28928,
+   "siteBrandId": 0,
+   "colors": [],
+   "subjectId": 3274,
+   "subjectParentId": 6238,
+   "semanticId": [
+    90,
+    65,
+    23,
+    114,
+    119,
+    657,
+    1
+   ],
+   "name": "Видеокарта RTX 5070 12 ГБ GAMING OC",
+   "entity": "",
+   "matchId": 218955362,
+   "supplier": "Modern Device",
+   "supplierId": 768659,
+   "supplierRating": 4.9,
+   "supplierFlags": 12240,
+   "pics": 12,
+   "picsUpdate": 0,
+   "rating": 5,
+   "reviewRating": 4.9,
+   "feedbacks": 66,
+   "panelPromoId": 1056340,
+   "volume": 182,
+   "weight": 2,
+   "viewFlags": 135553224,
+   "mtype": 1029,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 541366874,
+     "wh": 208782,
+     "time1": 15,
+     "time2": 29,
+     "dtype": 6614249635841,
+     "ndtype": 197121,
+     "price": {
+      "basic": 14190100,
+      "product": 10103300,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0,
+      "wallet": 0
+     },
+     "saleConditions": 2281701376,
+     "payload": "<redacted>"
+    }
+   ],
+   "totalQuantity": 37,
+   "time1": 15,
+   "time2": 29,
+   "wh": 208782,
+   "dtype": 6614249635841,
+   "ndtype": 197121,
+   "dtypeMask": 1,
+   "dist": 57,
+   "logs": "<redacted>",
+   "meta": {
+    "tokens": [],
+    "characteristics": [
+     {
+      "name": "Тип видеопамяти",
+      "values": [
+       "GDDR7"
+      ]
+     },
+     {
+      "name": "Частота графического процессора",
+      "values": [
+       "2330 МГц"
+      ]
+     }
+    ],
+    "presetId": 603479279
+   }
+  },
+  {
+   "id": 445317378,
+   "__sort": 132729,
+   "ksort": 0,
+   "root": 213872605,
+   "kindId": 0,
+   "brand": "Gigabyte",
+   "brandId": 28928,
+   "siteBrandId": 0,
+   "colors": [
+    {
+     "name": "белый",
+     "id": 16777215
+    }
+   ],
+   "subjectId": 3274,
+   "subjectParentId": 6238,
+   "semanticId": [
+    90,
+    65,
+    23,
+    114,
+    119,
+    657,
+    134
+   ],
+   "name": "Видеокарта RTX 5070 EAGLE OC ICE SFF 12G, 12 Гб GDDR7",
+   "entity": "",
+   "matchId": 213775070,
+   "supplier": "Getsy",
+   "supplierId": 1320048,
+   "supplierRating": 4.8,
+   "supplierFlags": 12240,
+   "pics": 12,
+   "picsUpdate": 0,
+   "rating": 5,
+   "reviewRating": 5,
+   "feedbacks": 14,
+   "volume": 98,
+   "weight": 1.8,
+   "viewFlags": 1335496,
+   "mtype": 5,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 629701851,
+     "wh": 211730,
+     "time1": 33,
+     "time2": 31,
+     "dtype": 6614249635841,
+     "ndtype": 197121,
+     "price": {
+      "basic": 26400000,
+      "product": 9210400,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0,
+      "wallet": 0
+     },
+     "saleConditions": 2281701376,
+     "payload": "<redacted>"
+    }
+   ],
+   "totalQuantity": 1,
+   "time1": 33,
+   "time2": 31,
+   "wh": 211730,
+   "dtype": 6614249635841,
+   "ndtype": 197121,
+   "dtypeMask": 1,
+   "dist": 85,
+   "logs": "<redacted>",
+   "meta": {
+    "tokens": [],
+    "characteristics": [
+     {
+      "name": "Тип видеопамяти",
+      "values": [
+       "GDDR7"
+      ]
+     },
+     {
+      "name": "Частота графического процессора",
+      "values": [
+       "2587 МГц"
+      ]
+     }
+    ],
+    "presetId": 603479279
+   }
+  }
+ ],
+ "total": 13748
+}
