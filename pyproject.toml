@@ -29,6 +29,7 @@ dependencies = [
     "dns-connector",
     "citilink-connector",
     "mvideo-connector",
+    "vseinstrumenti-connector",
     "aliexpress-connector",
     "marketplace-connector",
 ]
@@ -52,6 +53,7 @@ lamoda-connector = { workspace = true }
 dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
 mvideo-connector = { workspace = true }
+vseinstrumenti-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
 marketplace-connector = { workspace = true }
 
@@ -127,6 +129,7 @@ testpaths = [
     "packages/dns-connector/tests",
     "packages/citilink-connector/tests",
     "packages/mvideo-connector/tests",
+    "packages/vseinstrumenti-connector/tests",
     "packages/aliexpress-connector/tests",
     "packages/marketplace-connector/tests",
 ]
@@ -156,6 +159,7 @@ source = [
     "packages/dns-connector/src/dns_connector",
     "packages/citilink-connector/src/citilink_connector",
     "packages/mvideo-connector/src/mvideo_connector",
+    "packages/vseinstrumenti-connector/src/vseinstrumenti_connector",
     "packages/aliexpress-connector/src/aliexpress_connector",
     "packages/marketplace-connector/src/marketplace_connector",
 ]

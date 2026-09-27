@@ -23,6 +23,7 @@ members = [
     "mvideo-connector",
     "ozon-connector",
     "ru-shop-search",
+    "vseinstrumenti-connector",
     "wb-connector",
     "yandex-connector",
 ]
@@ -380,6 +381,7 @@ all = [
     { name = "lamoda-connector" },
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
+    { name = "vseinstrumenti-connector" },
 ]
 avito = [
     { name = "avito-connector" },
@@ -398,6 +400,9 @@ mvideo = [
 ]
 ozon = [
     { name = "ozon-connector" },
+]
+vseinstrumenti = [
+    { name = "vseinstrumenti-connector" },
 ]
 
 [package.metadata]
@@ -421,10 +426,12 @@ requires-dist = [
     { name = "ozon-connector", marker = "extra == 'ozon'", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
+    { name = "vseinstrumenti-connector", marker = "extra == 'all'", editable = "packages/vseinstrumenti-connector" },
+    { name = "vseinstrumenti-connector", marker = "extra == 'vseinstrumenti'", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "aliexpress", "all"]
 
 [[package]]
 name = "coverage"
@@ -1214,6 +1221,7 @@ dependencies = [
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
     { name = "pydantic" },
+    { name = "vseinstrumenti-connector" },
     { name = "wb-connector" },
     { name = "yandex-connector" },
 ]
@@ -1232,6 +1240,7 @@ requires-dist = [
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
+    { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
@@ -2020,6 +2029,7 @@ dependencies = [
     { name = "mcp-core" },
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
+    { name = "vseinstrumenti-connector" },
     { name = "wb-connector" },
     { name = "yandex-connector" },
 ]
@@ -2049,6 +2059,7 @@ requires-dist = [
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
+    { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
@@ -2203,6 +2214,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ea/fa/18004e5cb15541ad2a68ff219c755233b012b12d4ec8663d06a258082bec/virtualenv-21.7.1.tar.gz", hash = "sha256:d0dbfaa5483487baea28d7210ef8d24c9d1bd0f10f449eeb215568825a9b334e", size = 5525237, upload-time = "2026-07-30T15:40:36.36Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/a7/ded126c19495158a05c7202b3389139839d4cf78d622d453867778e0f7a8/virtualenv-21.7.1-py3-none-any.whl", hash = "sha256:6394973f990536e34c05157179146c020284c42fe01da1dfeb0ba16c345280d9", size = 5504576, upload-time = "2026-07-30T15:40:34.512Z" },
+]
+
+[[package]]
+name = "vseinstrumenti-connector"
+version = "2.4.2"
+source = { editable = "packages/vseinstrumenti-connector" }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
 ]
 
 [[package]]

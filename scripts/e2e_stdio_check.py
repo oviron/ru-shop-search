@@ -35,6 +35,7 @@ EXPECTED_INSTALLED = {
     "dns",
     "citilink",
     "mvideo",
+    "vseinstrumenti",
     "aliexpress",
 }
 

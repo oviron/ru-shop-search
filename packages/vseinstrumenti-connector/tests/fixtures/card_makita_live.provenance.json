@@ -1,0 +1,13 @@
+{
+  "url": "https://www.vseinstrumenti.ru/product/perforator-makita-hr-2470-5195/",
+  "captured_at": "2026-09-27",
+  "sha256": "9baeb30fc8d61b4711f8aa68d1fc1ac66815406e80ab105c6fcbc60cbf36bc96",
+  "method": "captured live on 2026-09-27 20:40:59, 200, 323 KB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title>, the schema.org Product ld+json cut to name, brand, offers, aggregateRating, and the __NUXT_DATA__ devalue array rebuilt from the reachable entries of the live one, tags (ShallowReactive, Reactive, JSONifiable, Set, null) and shared refs kept, indices renumbered. Kept: state.$sactiveRegion (id, name, domain) and the data block with info, cut to id, code, guid, name, brand (id, name), isAvailable, pricesV2.default (current, old, availableDiscountPrices), availability (shops, warehouses, suppliers, inRegion), responses (amount, averageRatio), productWithdrawnFromSale, isLastPrice. Dropped: questions with their authors' names, review blocks with buyer names (DOM person-name), the visitor id (mkId, sigma userId), pinia.ReviewsStore",
+  "ground_truth": {
+    "product": "Перфоратор Makita HR2470, id 5195, brand Makita",
+    "price": "12 500, old 15 240 (only in __NUXT_DATA__, the ld+json offer has 12 500 only)",
+    "rating": "4.7 from 2475",
+    "available": true,
+    "city": "Санкт-Петербург"
+  }
+}

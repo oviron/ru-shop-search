@@ -27,6 +27,7 @@ lamoda = ["lamoda-connector"]
 dns = ["dns-connector"]
 citilink = ["citilink-connector"]
 mvideo = ["mvideo-connector"]
+vseinstrumenti = ["vseinstrumenti-connector"]
 aliexpress = ["aliexpress-connector"]
 all = [
     "ozon-connector",
@@ -35,6 +36,7 @@ all = [
     "dns-connector",
     "citilink-connector",
     "mvideo-connector",
+    "vseinstrumenti-connector",
     "aliexpress-connector",
 ]
 
@@ -59,3 +61,4 @@ lamoda-connector = { workspace = true }
 dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
 mvideo-connector = { workspace = true }
+vseinstrumenti-connector = { workspace = true }

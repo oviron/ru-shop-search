@@ -1,0 +1,10 @@
+{
+  "url": "https://www.vseinstrumenti.ru/product/5195/",
+  "captured_at": "2026-09-27",
+  "sha256": "836b011b45e0440ad235259f165d8074daa906ef80bc47d53eebae8fb0febbe5",
+  "method": "captured live on 2026-09-27 20:42:07, 404, 48 KB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title> and the __NUXT_DATA__ devalue array rebuilt from the reachable entries of the live one, tags (ShallowReactive, Reactive, JSONifiable, Set, null) and shared refs kept, indices renumbered. Kept everything reachable except state other than $sactiveRegion (id, name, domain)",
+  "ground_truth": {
+    "status": 404,
+    "note": "a bare /product/<id>/ does not open; the site needs /product/<slug>-<id>/"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "url": "https://www.vseinstrumenti.ru/search/?what=%D0%BF%D0%B5%D1%80%D1%84%D0%BE%D1%80%D0%B0%D1%82%D0%BE%D1%80%20makita",
+  "captured_at": "2026-09-27",
+  "sha256": "34abbe5f337ec9c5e4ad50da25c059d503a4a37c95ed24c4672f3b1002fc59bf",
+  "method": "captured live on 2026-09-27 20:36:13, 200, 478 KB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title> and the __NUXT_DATA__ devalue array rebuilt from the reachable entries of the live one, tags (ShallowReactive, Reactive, JSONifiable, Set, null) and shared refs kept, indices renumbered. Kept: state.$sactiveRegion (id, name, domain); pinia.ListingStore pageNumber, productsCount and 6 of the 40 products (rows 1, 2, 3, 26, 33, 35 of the page), each cut to id, code, name, link, isAvailable, pricesV2, availabilityInfo, responses (amount, averageRatio), makeId, button.type. Dropped: the visitor id (mkId, sigma userId) and the rest of state",
+  "ground_truth": {
+    "city": "Санкт-Петербург",
+    "productsCount": 138,
+    "rows": {
+      "5195": "12 500, old 15 240, 2475 reviews avg 4.7, 115 in stock",
+      "814840": "14 490, old 17 875, 245 reviews",
+      "22025396": "10 290, 6 reviews",
+      "713544": "32 835, pickup only, button oneClick",
+      "18915549": "5 440, old 6 240, availableDiscountPrices discountB2B 4 669 (not a price for any buyer)",
+      "772527": "69 537, old 77 590, availabilityInfo empty (official dealer)"
+    }
+  }
+}

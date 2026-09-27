@@ -24,6 +24,7 @@ dependencies = [
     "dns-connector",
     "citilink-connector",
     "mvideo-connector",
+    "vseinstrumenti-connector",
     "aliexpress-connector",
     "compare-connector",
 ]
@@ -49,5 +50,6 @@ lamoda-connector = { workspace = true }
 dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
 mvideo-connector = { workspace = true }
+vseinstrumenti-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
 compare-connector = { workspace = true }

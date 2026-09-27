@@ -218,6 +218,45 @@ async def test_mvideo_search_rows_become_offers(monkeypatch):
     assert [(o.product_id, o.seller) for o in offers if o.seller != "М.Видео"] == [("402590260", "")]
 
 
+async def test_vseinstrumenti_search_rows_become_offers(monkeypatch):
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from mcp_core.transport import impersonated
+    from mcp_core.transport.impersonated import Reply
+    from vseinstrumenti_connector import server as vseinstrumenti
+
+    fixture = Path(__file__).parents[2] / "vseinstrumenti-connector/tests/fixtures/search_makita_live.html"
+
+    async def fake_get(url, **kwargs):
+        return Reply(200, fixture.read_text(encoding="utf-8"), None)
+
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+    monkeypatch.setattr(vseinstrumenti, "_pacer", Pacer(0.0, source="vseinstrumenti", gate=StopGate(None)))
+    vseinstrumenti._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"vseinstrumenti": vseinstrumenti})
+
+    offers = await server._search_vseinstrumenti("перфоратор makita", 2)
+
+    assert [(o.product_id, o.price_rub, o.seller, o.rating_count, o.in_stock, o.url) for o in offers] == [
+        (
+            "5195",
+            12500.0,
+            "ВсеИнструменты",
+            2475,
+            True,
+            "https://www.vseinstrumenti.ru/product/perforator-makita-hr-2470-5195/",
+        ),
+        (
+            "814840",
+            14490.0,
+            "ВсеИнструменты",
+            245,
+            True,
+            "https://www.vseinstrumenti.ru/product/perforator-makita-hr2470x15-814840/",
+        ),
+    ]
+
+
 # ----------------------------------------------------------------- ranking ----
 
 
