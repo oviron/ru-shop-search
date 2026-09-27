@@ -29,6 +29,7 @@ citilink = ["citilink-connector"]
 mvideo = ["mvideo-connector"]
 vseinstrumenti = ["vseinstrumenti-connector"]
 regard = ["regard-connector"]
+nix = ["nix-connector"]
 aliexpress = ["aliexpress-connector"]
 all = [
     "ozon-connector",
@@ -39,6 +40,7 @@ all = [
     "mvideo-connector",
     "vseinstrumenti-connector",
     "regard-connector",
+    "nix-connector",
     "aliexpress-connector",
 ]
 
@@ -65,3 +67,4 @@ citilink-connector = { workspace = true }
 mvideo-connector = { workspace = true }
 vseinstrumenti-connector = { workspace = true }
 regard-connector = { workspace = true }
+nix-connector = { workspace = true }

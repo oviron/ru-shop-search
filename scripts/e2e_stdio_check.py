@@ -37,6 +37,7 @@ EXPECTED_INSTALLED = {
     "mvideo",
     "vseinstrumenti",
     "regard",
+    "nix",
     "aliexpress",
 }
 

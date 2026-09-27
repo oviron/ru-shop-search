@@ -21,6 +21,7 @@ members = [
     "marketplace-connector",
     "mcp-core",
     "mvideo-connector",
+    "nix-connector",
     "ozon-connector",
     "regard-connector",
     "ru-shop-search",
@@ -381,6 +382,7 @@ all = [
     { name = "dns-connector" },
     { name = "lamoda-connector" },
     { name = "mvideo-connector" },
+    { name = "nix-connector" },
     { name = "ozon-connector" },
     { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
@@ -399,6 +401,9 @@ lamoda = [
 ]
 mvideo = [
     { name = "mvideo-connector" },
+]
+nix = [
+    { name = "nix-connector" },
 ]
 ozon = [
     { name = "ozon-connector" },
@@ -427,6 +432,8 @@ requires-dist = [
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", marker = "extra == 'all'", editable = "packages/mvideo-connector" },
     { name = "mvideo-connector", marker = "extra == 'mvideo'", editable = "packages/mvideo-connector" },
+    { name = "nix-connector", marker = "extra == 'all'", editable = "packages/nix-connector" },
+    { name = "nix-connector", marker = "extra == 'nix'", editable = "packages/nix-connector" },
     { name = "ozon-connector", marker = "extra == 'all'", editable = "packages/ozon-connector" },
     { name = "ozon-connector", marker = "extra == 'ozon'", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
@@ -438,7 +445,7 @@ requires-dist = [
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "nix", "aliexpress", "all"]
 
 [[package]]
 name = "coverage"
@@ -1226,6 +1233,7 @@ dependencies = [
     { name = "lamoda-connector" },
     { name = "mcp-core" },
     { name = "mvideo-connector" },
+    { name = "nix-connector" },
     { name = "ozon-connector" },
     { name = "pydantic" },
     { name = "regard-connector" },
@@ -1246,6 +1254,7 @@ requires-dist = [
     { name = "lamoda-connector", editable = "packages/lamoda-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
+    { name = "nix-connector", editable = "packages/nix-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "regard-connector", editable = "packages/regard-connector" },
@@ -1413,6 +1422,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
+]
+
+[[package]]
+name = "nix-connector"
+version = "2.4.2"
+source = { editable = "packages/nix-connector" }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "playwright" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "playwright", specifier = ">=1.40" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
 ]
 
 [[package]]
@@ -2058,6 +2090,7 @@ dependencies = [
     { name = "marketplace-connector" },
     { name = "mcp-core" },
     { name = "mvideo-connector" },
+    { name = "nix-connector" },
     { name = "ozon-connector" },
     { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
@@ -2089,6 +2122,7 @@ requires-dist = [
     { name = "marketplace-connector", editable = "packages/marketplace-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
+    { name = "nix-connector", editable = "packages/nix-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "regard-connector", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },

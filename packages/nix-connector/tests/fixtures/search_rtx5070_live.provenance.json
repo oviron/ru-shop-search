@@ -1,0 +1,13 @@
+{
+  "url": "https://www.nix.ru/price/search_panel_ajax.html#keywords=rtx%205070",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:26:35 in the plugin's Chrome tab (anonymous profile, home IP): document 200, XHR FastSearch/goods 200, 100 rows rendered. The file is what the connector's extractor returns: page title, city, answered (.fts-keywords holds the query), the «найдено N товаров» text and the first 6 rows' outerHTML with the compare-icon <svg> removed. groups: the category chips (.fts-header-group[id^=fts-cat-]) of the same saved page.",
+  "ground_truth": {
+    "907082": "Zotac, 01.10, от 124 193 до 128 042",
+    "860397": "GIGABYTE Gaming, 07.10, от 109 296 до 112 683 (card price 112 683, СУПЕРЦЕНА 109 296)",
+    "total": "287",
+    "city": "Москва",
+    "groups": "Видеокарты, Ноутбуки, Компьютеры проверенные практикой, Компьютеры Acer, Apple, ASUS, iRU, Lenovo, RDW, HP"
+  },
+  "sha256": "701809622d831a31d6b941586e190f823ec45fe77dfba13472fd1747900f46ab"
+}

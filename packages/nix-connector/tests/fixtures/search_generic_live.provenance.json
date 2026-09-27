@@ -1,0 +1,11 @@
+{
+  "url": "https://www.nix.ru/price/search_panel_ajax.html#keywords=видеокарта",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:51:44 in the plugin's Chrome tab (anonymous profile, home IP) through the connector's own extractor; the file keeps the first 4 row(s) and drops the «Все категории» chip.",
+  "ground_truth": {
+    "total": "5000 товаров",
+    "groups": "Видеокарты, Видеокарты USB, Видео кабели и переходники HDMI, DVI, DisplayPort, Компьютеры проверенные практикой",
+    "rows": "50 video cards rendered; no title says «видеокарта», the chip «Видеокарты» does"
+  },
+  "sha256": "594906253da2ae74adb10d6f38d6f3b5a6a2e2cea29bf63699d68296cf15eea5"
+}

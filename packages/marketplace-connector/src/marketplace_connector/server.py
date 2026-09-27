@@ -39,7 +39,10 @@ class Shop(BaseModel):
     key: str = Field(description="Имя магазина для параметра shops.")
     title: str = Field(description="Название магазина.")
     transport: str = Field(
-        description="http, http+browser-token, http+browser (поиск по HTTP, карточка во вкладке) или browser."
+        description=(
+            "http, http+browser-token, http+browser (поиск по HTTP, карточка во вкладке), "
+            "browser+http (поиск во вкладке, карточка по HTTP) или browser."
+        )
     )
     text_search: bool = Field(description="Есть ли текстовый поиск.")
     installed: bool = Field(description="Коннектор подключён в этом сервере.")
@@ -64,7 +67,7 @@ _SHOPS: tuple[tuple[str, str, str], ...] = (
     ("lamoda", "Лэмода", "http"),
     ("vseinstrumenti", "ВсеИнструменты", "http"),
     ("regard", "Regard", "http"),
-    ("nix", "Никс", "http"),
+    ("nix", "Никс", "browser+http"),
     ("holodilnik", "Холодильник", "http"),
     ("aliexpress", "AliExpress", "browser"),
     ("pepper", "Pepper", "browser"),

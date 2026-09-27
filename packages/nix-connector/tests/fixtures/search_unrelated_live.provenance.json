@@ -1,0 +1,11 @@
+{
+  "url": "https://www.nix.ru/price/search_panel_ajax.html#keywords=qzxwvkjh",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:29:39 the same way. Nix cut the nonsense word to 'qz' (token_stats.parts ' qz:%' in the XHR) and rendered 22 unrelated DeWalt rows; the file keeps the first 4. groups: the category chips (.fts-header-group[id^=fts-cat-]) of the same saved page.",
+  "ground_truth": {
+    "rows": "DT2053-QZ, DT70730T-QZ, DT70737T-QZ, … — none names the query",
+    "total": "22",
+    "groups": "Торцевые головки и биты, Расходные материалы прочие, Ноутбуки, Wi-Fi роутеры, адаптеры, точки доступа"
+  },
+  "sha256": "5c8195eaa9f87f3878cdf88eaef2b2c046a7d80dff61b5835cc9ad525e20238d"
+}

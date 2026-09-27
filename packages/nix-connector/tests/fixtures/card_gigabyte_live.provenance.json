@@ -1,0 +1,13 @@
+{
+  "url": "https://www.nix.ru/autocatalog/gigabyte/video/12Gb-PCI-E-GDDR7-GIGABYTE-GV-N5070GAMING-OC-12GD-RTL-HDMI-plus-3xDP-GeForce-RTX5070_860397.html",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:24:00, 200, windows-1251, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: the original fragments <title>, og:url, the city toolbar, the schema.org Product head metas, <h1>, the СУПЕРЦЕНА line and the schema.org Offer, re-saved as UTF-8. Dropped: photos, specs, shop list, reviews and scripts.",
+  "ground_truth": {
+    "price": "112 683 (itemprop price)",
+    "superprice": "109 296 — prepay and pickup only, not the price",
+    "availability": "http://schema.org/InStock",
+    "brand": "GIGABYTE",
+    "city": "Москва"
+  },
+  "sha256": "fc4dab068ea8c55ccfbca7c3517aa158635e3196ba3aa878ad130a18c15a835b"
+}

@@ -21,6 +21,7 @@ ru-shop-search/
 │   ├── mvideo-connector/       M.Video              → mvideo-mcp
 │   ├── vseinstrumenti-connector/ VseInstrumenti     → vseinstrumenti-mcp
 │   ├── regard-connector/       Regard               → regard-mcp
+│   ├── nix-connector/          Nix                  → nix-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
 │   └── marketplace-connector/  plugin server + CLI  → marketplace-mcp

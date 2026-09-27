@@ -80,6 +80,7 @@ _CARD_TOOL_NAMES = {
     "mvideo": "mvideo_card",
     "vseinstrumenti": "vseinstrumenti_card",
     "regard": "regard_card",
+    "nix": "nix_card",
     "aliexpress": "aliexpress_card",
 }
 
@@ -170,6 +171,13 @@ def _available_sources() -> dict[str, Any]:
         log_event("compare.source_unavailable", source="regard", error=_redact(str(exc))[:120])
 
     try:
+        from nix_connector import server as nix_server
+
+        sources["nix"] = nix_server
+    except Exception as exc:
+        log_event("compare.source_unavailable", source="nix", error=_redact(str(exc))[:120])
+
+    try:
         from aliexpress_connector import server as aliexpress_server
 
         sources["aliexpress"] = aliexpress_server
@@ -197,6 +205,7 @@ SEARCHABLE = (
     "mvideo",
     "vseinstrumenti",
     "regard",
+    "nix",
     "aliexpress",
     "detsky_mir",
 )
@@ -739,6 +748,27 @@ async def _search_regard(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+async def _search_nix(query: str, limit: int) -> list[MarketOffer]:
+    """Adapt ``nix_search`` results (the plugin's Chrome tab; СУПЕРЦЕНА is never the price)."""
+    server = SOURCES["nix"]
+    response = await server.nix_search(query=query, limit=min(limit, 50))
+
+    offers: list[MarketOffer] = []
+    for item in (getattr(response, "items", None) or [])[:limit]:
+        offers.append(
+            MarketOffer(
+                source="nix",
+                product_id=str(item.product_id or ""),
+                title=item.title or "",
+                seller="Никс",
+                price_rub=item.price_rub,
+                in_stock=item.in_stock,
+                url=item.url or "",
+            )
+        )
+    return OfferBatch(offers, response)
+
+
 async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``aliexpress_search`` results (CDP tier; prices in rubles).
 
@@ -804,6 +834,7 @@ _SEARCH_IMPLS = {
     "mvideo": _search_mvideo,
     "vseinstrumenti": _search_vseinstrumenti,
     "regard": _search_regard,
+    "nix": _search_nix,
     "aliexpress": _search_aliexpress,
     "detsky_mir": _search_detmir,
 }
@@ -1188,6 +1219,7 @@ async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool
             "mvideo": "product_id_or_url",
             "vseinstrumenti": "url",
             "regard": "url",
+            "nix": "url",
             "aliexpress": "item_id_or_url",
         }[name]
         result = await _gated(name, lambda: tool(**{argument: product_id_or_url}))
@@ -1396,6 +1428,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             "regard": (
                 "search and cards read the site's pages over HTTP with Moscow prices; bonus "
                 "roubles are never price, a card opens by its URL or bare id"
+            ),
+            "nix": (
+                "search renders in the plugin's Chrome tab, cards read the page over HTTP, "
+                "Moscow prices; СУПЕРЦЕНА (prepay and pickup) is never the price"
             ),
             "aliexpress": (
                 "reachable only through the operator's Chrome (x5sec); a challenged session "

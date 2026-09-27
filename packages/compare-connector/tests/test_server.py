@@ -285,6 +285,41 @@ async def test_regard_search_rows_become_offers(monkeypatch):
     )
 
 
+async def test_nix_search_rows_become_offers(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from nix_connector import server as nix
+
+    fixture = Path(__file__).parents[2] / "nix-connector/tests/fixtures/search_rtx5070_live.json"
+
+    class FakePage:
+        async def evaluate(self, expression, arg=None):
+            return fixture.read_text(encoding="utf-8")
+
+    @asynccontextmanager
+    async def open_page(url, wait_ms=5000, **kwargs):
+        yield FakePage()
+
+    monkeypatch.setattr(nix, "open_page", open_page)
+    monkeypatch.setattr(nix, "_pacer", Pacer(0.0, source="nix", gate=StopGate(None)))
+    monkeypatch.setattr(nix, "_min_gap", 0.0)
+    nix._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"nix": nix})
+
+    offers = await server._search_nix("rtx 5070", 2)
+
+    assert [(o.product_id, o.price_rub, o.seller, o.in_stock) for o in offers] == [
+        ("907082", 128042.0, "Никс", True),
+        ("860397", 112683.0, "Никс", True),
+    ]
+    assert offers[1].url == (
+        "https://www.nix.ru/autocatalog/gigabyte/video/"
+        "12Gb-PCI-E-GDDR7-GIGABYTE-GV-N5070GAMING-OC-12GD-RTL-HDMI-plus-3xDP-GeForce-RTX5070_860397.html"
+    )
+
+
 # ----------------------------------------------------------------- ranking ----
 
 

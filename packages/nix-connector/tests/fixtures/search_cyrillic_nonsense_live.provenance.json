@@ -1,0 +1,11 @@
+{
+  "url": "https://www.nix.ru/price/search_panel_ajax.html#keywords=абырвалг",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:51:52 in the plugin's Chrome tab (anonymous profile, home IP) through the connector's own extractor; the file keeps the first 1 row(s) and drops the «Все категории» chip.",
+  "ground_truth": {
+    "total": "1 товар",
+    "groups": "Коммутационные кабели (patch cord)",
+    "rows": "one unrelated patch cord; neither it nor the chip «Коммутационные кабели (patch cord)» names the query"
+  },
+  "sha256": "cb6f17aa1ffa39a0f2f97dc43d3d661a7cb187db829b11ed63dc78d52e51afb7"
+}
