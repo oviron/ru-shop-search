@@ -21,7 +21,7 @@ members = [
     "marketplace-connector",
     "mcp-core",
     "ozon-connector",
-    "ru-marketplace-mcp",
+    "ru-shop-search",
     "wb-connector",
     "yandex-connector",
 ]
@@ -1977,7 +1977,7 @@ wheels = [
 ]
 
 [[package]]
-name = "ru-marketplace-mcp"
+name = "ru-shop-search"
 version = "2.4.2"
 source = { virtual = "." }
 dependencies = [

@@ -1,7 +1,7 @@
 """Entry point for the Citilink-Shop MCP server.
 
 Exposed as the ``citilink-mcp`` console script. stdio is the default transport; set
-``MCP_TRANSPORT=http`` for HTTP — see docs/DEPLOYMENT.md. Diagnostics go to
+``MCP_TRANSPORT=http`` for HTTP — see ``mcp_core.runtime``. Diagnostics go to
 stderr; nothing here may write to stdout.
 """
 

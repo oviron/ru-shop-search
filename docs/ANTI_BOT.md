@@ -1,5 +1,11 @@
 # Anti-bot reality, source by source
 
+> Это разведка апстрима `ru-marketplace-mcp` (июль–сентябрь 2026, в основном с
+> датацентрового IP), оставленная как справка по механике антиботов. Разделы о
+> вырезанных источниках (Taobao, Мегамаркет, Циан) удалены. Текущая картина с
+> домашнего IP: [handoff/research-2026-09-27.md](handoff/research-2026-09-27.md),
+> что работает сейчас: [LIVE_STATUS.md](LIVE_STATUS.md).
+
 Every marketplace here was probed live from a datacenter IP in July 2026 —
 except AliExpress, which was probed from a Russian residential IP in August 2026
 and has its own section below. This
@@ -21,8 +27,6 @@ inside a real browser.
 | Detsky Mir | ✅ works | none | ✅ |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
 | Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
-| Taobao | ⚠️ shell only | signed mtop API | ✅ via your Chrome + login |
-| Megamarket | ❌ blocked | ServicePipe | ✅ via your Chrome + login |
 | Lamoda | ⚠️ partial | anti-bot redirect loop | ✅ via your Chrome |
 | DNS | ❌ 401 | Qrator JS proof-of-work | ✅ via your Chrome |
 | Citilink | ❌ 429 | Qrator rate block | ✅ via your Chrome |
@@ -259,32 +263,6 @@ a server proxy. Nobody has a cleaner path. IP reputation and request rate are th
 blocker, so this one wants a residential or mobile IP and patience on top of the
 browser.
 
-### Taobao — anonymous pages, signed API
-
-Also probed July 2026 from a datacenter IP:
-
-- **Search page** (`s.taobao.com/search?q=…`): HTTP 200, but only a ~33 KB
-  client-side-rendered shell. No `g_page_config` item list, no embedded state —
-  results load over XHR after the page boots.
-- **The XHR layer is mtop** (`h5api.m.taobao.com`): every call wants a `sign`
-  parameter computed from the `_m_h5_tk` cookie token plus the request body.
-  Without the token: `FAIL_SYS_TOKEN_EMPTY::令牌为空`. The signing scheme is
-  reversed in open source, but token rotation makes it a treadmill.
-- **No captcha on anonymous browsing.** Main page, 1688 search and AliExpress
-  all answer 200 from the same IP. The block is API-level, not IP-level.
-
-**Verdict:** tier 2 by a different mechanism than Avito — not IP reputation but
-a signed API. A real Chrome computes signatures natively via the site's own JS,
-so the connector drives search through CDP page evaluation and reads the
-rendered DOM / page state. No impersonation shortcut is worth maintaining here.
-
-Live check, July 2026: this works only while the operator's Taobao session is
-logged in. A QR login in the scraping profile took it to healthy; a burst of
-back-to-back requests then took it back down to a parse failure. So Taobao needs
-two things the other CDP sources do not both need at once — a logged-in session
-*and* paced requests. `taobao_search` says as much when it lands on a login wall,
-and the connector paces its own calls.
-
 ## Sources that needed the CDP tier
 
 The four below were rejected in v1.0/v1.1 because anonymous probing could not
@@ -295,43 +273,6 @@ Chrome finally confirmed them end to end. DNS and Citilink went healthy once the
 product-id regex was fixed. Megamarket and Lamoda did not: the challenge passes
 but the result comes back empty or link-less, which the sections below explain.
 Run the `*_selfcheck` tools from your own session before quoting either of those.
-
-### Megamarket — clean API, hard block
-
-The internal mobile API is the nicest of the lot:
-
-```
-POST https://megamarket.ru/api/mobile/v1/catalogService/catalog/search
-POST https://megamarket.ru/api/mobile/v1/catalogService/productCard/get
-```
-
-It accepts requests and returns valid JSON — but always this:
-
-```json
-{"error": "Произошла ошибка. Попробуйте отключить VPN…", "code": 7, "ip": "203.0.113.0"}
-```
-
-Echoing our own IP back is an unambiguous reputation block. ServicePipe
-(`X-SP-CRID` header, JS challenge on the homepage) gates the whole site. The
-best-known open-source parser for this API states plainly that it stopped working
-without browser cookies in early 2025.
-
-**Verdict:** a second Ozon, but stricter — needs residential IP *and* cookies from
-a browser that has passed the challenge. Shipped in v1.2.0 via the CDP tier: the
-`megamarket-connector` POSTs the mobile API from inside the operator's Chrome and
-maps the code-7 refusal to `transport_down`.
-
-The July 2026 run got past the code-7 block — from the browser the ServicePipe
-challenge passes and the API answers a valid envelope — but `items` came back as
-an empty array for every query. That points at the session, not the fetch. The
-actively maintained `xob0t/mmparser` (Python, same mobile API) documents that
-since early 2025 parsing without cookies does not work: the challenge passes, the
-session is not authenticated, and the API answers an empty result instead of an
-error. So a passed challenge is not enough — Megamarket needs a session that is
-actually logged in, and an anonymous but challenge-cleared browser reads empty.
-`mmparser` also paces its calls at 1.8 s normally and 5 s after an error and
-carries a dedicated "you are logged out" alert, which matches what an empty
-`items` array means here. Run `megamarket_selfcheck` from a logged-in session.
 
 ### Lamoda — prices without discovery
 
@@ -531,7 +472,7 @@ a lookalike reseller. Confidence without verification is the failure mode this
 project refuses.
 
 **What exists instead:** the verified URL template and the live-verification steps
-are in `RELEASE_CHECKLIST.md`, for an operator on a Russian residential IP or with the
+are in the upstream `RELEASE_CHECKLIST.md`, for an operator on a Russian residential IP or with the
 CDP tier available. If the payload confirms, the tool is a small addition on top of
 the existing two-tier fetch. Until then there is no `ozon_seller`.
 
@@ -621,56 +562,3 @@ per-request proof-of-work is precisely the case the doctrine calls "Neither".
 The connector does not pretend otherwise: on a challenge it degrades into
 `price_missing`/transport errors and tells the operator to pass the check by
 hand.
-
-## Cian (added 2026-09-09)
-
-Real estate, not a marketplace — but the same doctrine applies and the probe
-came out unusually clean. Probed from a datacenter egress (VPN, Timeweb DE) on
-2026-09-09, first with plain HTTP and then through the operator's Chrome.
-
-**Plain HTTP (question 1):** everything is 403 — the search page, the offer
-card, and the internal JSON API `api.cian.ru/search-offers/v2/search-offers-desktop/`,
-with full Chrome headers. The block page is Cian's own WAF
-(`Код страницы: cian_waf_block`, «Обнаружен подозрительный трафик»), no captcha
-markers, no redirect loop. It sets `_yasc` and answers by IP reputation:
-question 2's answer is "firewall", not "challenge".
-
-**Inside the operator's Chrome (tier 2):** the same egress passes. The search
-page renders (636 listings for a one-room Moscow query), and — the useful part —
-the page's own JSON API answers an in-page `fetch` POST with
-`credentials: 'include'`: 200, `data.offersSerialized[]` (28 per page),
-`data.aggregatedCount`, `data.offerCount`. Structured fields, no HTML parsing:
-id, `bargainTerms.priceRur`/`price`, `totalArea`, `roomsCount`, `floorNumber`,
-`building.floorsCount`, `geo.userInput`, `geo.undergrounds[]`, `fullUrl`,
-`user.agencyName`, `isByHomeowner`, `creationDate`. `jsonQuery` keys confirmed
-live: `_type` (`flatsale`, `flatrent`, `suburbansale`, `commercialsale`),
-`engine_version 2`, `region` (1 Moscow, 2 St. Petersburg, 4593 Moscow oblast,
-4588 Leningrad oblast — all four verified by the addresses that came back),
-`room` (`[0]` yields `roomSale` offers), `price` range, `page`, `for_day "!1"`
-(long-term rent).
-
-**Offer card (question 3):** `https://www.cian.ru/sale/flat/<id>/` embeds the
-whole offer in `window._cianConfig['frontend-offer-card']` →
-`defaultState.offerData`: `offer` (83 keys; a new-building offer carries the
-price in `bargainTerms.price` and `priceTotalRur`, with NO `priceRur` — the
-parser reads all three), `agent`, `company`, `priceChanges` (price history),
-`stats` («12907 просмотров, 98 за сегодня» as a string). A rent id requested
-under `/sale/flat/` is redirected by Cian to the right `/rent/flat/` URL on the
-regional subdomain, `offerData` intact.
-
-**Reviews:** none as a data family — real estate has no per-offer reviews.
-
-**Agent page:** `/agents/<id>/` renders, but `_cianConfig['realtor-reviews-frontend']`
-is application config (project name, version, telemetry endpoints), and the
-profile facts («На Циане 1 год», «В работе 1500 объектов», «Регион работы»)
-exist only as DOM text. No structured source → no `cian_agent` tool, per the
-rule at the end of ADDING_A_SOURCE.md. The agent's name, type and id ship inside
-`cian_card` from `offerData.agent`.
-
-**Load (question 5):** eight back-to-back API POSTs inside the session: all
-200, ~1.2 s each, no 429. The connector still paces itself (1.5 s) and holds
-one tab under a lock; a 403 inside the session maps to `transport_down` with
-the instruction to open cian.ru in the scraping Chrome and pass the check.
-
-**Verdict:** tier 2 only, JSON both ways. Tier 1 (`curl_cffi`) was not built:
-the WAF keys on IP and the residential case is unmeasured.

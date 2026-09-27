@@ -1,5 +1,5 @@
 {
-  "name": "ru-marketplace-mcp",
+  "name": "ru-shop-search",
   "version": "1.6.0",
   "description": "Dev-only manifest: installs jsdom for the offline DOM-extractor tests. Not a Node project.",
   "private": true,

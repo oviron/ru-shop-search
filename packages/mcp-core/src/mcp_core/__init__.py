@@ -1,4 +1,4 @@
-"""Shared runtime for ru-marketplace-mcp connectors.
+"""Shared runtime for ru-shop-search connectors.
 
 Every marketplace connector in this repo is a thin FastMCP wrapper over the
 primitives collected here, so that adding a new source means writing fetch +

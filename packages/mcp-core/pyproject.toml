@@ -1,7 +1,7 @@
 [project]
 name = "mcp-core"
 version = "2.4.2"
-description = "Shared runtime for ru-marketplace-mcp connectors — error taxonomy, transports, tolerant-reader helpers"
+description = "Shared runtime for ru-shop-search connectors — error taxonomy, transports, tolerant-reader helpers"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Vladimir-Human", email = "39053957+Vladimir-Human@users.noreply.github.com" }]

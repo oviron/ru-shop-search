@@ -1,15 +1,16 @@
 [project]
-name = "ru-marketplace-mcp"
+name = "ru-shop-search"
 version = "2.4.2"
-description = "MCP servers for Russian marketplaces — Wildberries, Ozon and more"
+description = "Плагин Claude Code: поиск и сравнение цен в российских магазинах"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "Vladimir-Human", email = "39053957+Vladimir-Human@users.noreply.github.com" }]
-keywords = ["mcp", "model-context-protocol", "wildberries", "ozon", "marketplace", "russia", "ecommerce"]
+authors = [
+    { name = "Dmitry Avdonkin" },
+    { name = "Vladimir-Human", email = "39053957+Vladimir-Human@users.noreply.github.com" },
+]
+keywords = ["mcp", "claude-code-plugin", "wildberries", "ozon", "price-comparison", "russia"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -32,10 +33,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Vladimir-Human/ru-marketplace-mcp"
-Repository = "https://github.com/Vladimir-Human/ru-marketplace-mcp"
-Issues = "https://github.com/Vladimir-Human/ru-marketplace-mcp/issues"
-Changelog = "https://github.com/Vladimir-Human/ru-marketplace-mcp/blob/main/CHANGELOG.md"
+Repository = "https://github.com/oviron/ru-shop-search"
+Upstream = "https://github.com/Vladimir-Human/ru-marketplace-mcp"
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -137,7 +136,7 @@ markers = [
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.coverage.run]
-# Measure the sixteen workspace packages' source, not their tests. This is what the
+# Measure the workspace packages' source, not their tests. This is what the
 # `--cov` invocation in the CI coverage job reports against; the enforcing
 # --cov-fail-under floor is passed on that job's command line, not baked in here,
 # so the rest of the test matrix runs exactly as before.

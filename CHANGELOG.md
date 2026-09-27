@@ -4,10 +4,24 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), нумерация версий — по
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Русский текст первый, английский — ниже в каждом разделе. Аудитория проекта
-русскоязычная, и переводить для неё собственные заметки о релизе странно.
+С версии 2.4.2 проект живёт как форк `ru-shop-search`: плагин Claude Code для
+одного пользователя. Записи ниже раздела «ru-shop-search» относятся к апстриму
+`Vladimir-Human/ru-marketplace-mcp` и оставлены как история.
 
-## [Unreleased]
+## [Unreleased] — ru-shop-search
+
+### Изменено
+
+- Проект переименован в `ru-shop-search`, README переписан по-русски.
+
+### Удалено
+
+- Коннекторы Taobao, MPStats, Циан и Мегамаркет, каталоги `dsh/` и `work/`,
+  Docker-образы, `server.json`, workflow релиза и публикации в MCP-реестр,
+  ночной живой прогон в CI, профиль `decision-mcp`, подкоманда
+  `marketplace-mcp install`, документы о релизах и развёртывании.
+
+## [Апстрим после 2.4.2, не выпущено]
 
 ### Fixed
 

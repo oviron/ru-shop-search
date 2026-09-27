@@ -1,7 +1,7 @@
 """Entry point for the unified marketplace MCP server.
 
 Exposed as the ``marketplace-mcp`` console script. stdio is the default
-transport; set ``MCP_TRANSPORT=http`` for HTTP — see docs/DEPLOYMENT.md.
+transport; set ``MCP_TRANSPORT=http`` for HTTP — see ``mcp_core.runtime``.
 Diagnostics go to stderr; nothing here may write to stdout.
 """
 

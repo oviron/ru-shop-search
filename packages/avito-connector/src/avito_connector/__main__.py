@@ -7,7 +7,7 @@ server without knowing where the package lives on disk:
 
 stdio is the default transport because that is what MCP clients speak. Set
 ``MCP_TRANSPORT=http`` (with optional ``MCP_HTTP_HOST``/``MCP_HTTP_PORT``/
-``MCP_HTTP_PATH``) to run it over HTTP — see docs/DEPLOYMENT.md. Transport
+``MCP_HTTP_PATH``) to run it over HTTP — see ``mcp_core.runtime``. Transport
 selection lives in ``mcp_core.runtime`` and writes diagnostics to stderr;
 nothing here may write to stdout, which the JSON-RPC stream owns.
 """

@@ -180,12 +180,28 @@ _JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_
     ],
 )
 def test_session_cookies_and_jwts_are_scrubbed(text):
-    """The MPStats connector holds the only secret this project ever sees — a
-    live paid-session JWT. Nothing is known to put it in an error string today,
-    but its docstring claimed this scrubbing existed before it did, so the claim
-    is pinned here rather than trusted."""
+    """Session cookies and bare JWTs never reach an error string."""
     assert _JWT not in redact_error_text(text)
     assert "eyJ" not in redact_error_text(text)
+
+
+_ANTIBOT = "1c9f0e3a7b2d4f6e8a0b1c2d3e4f5a6b"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"dns-shop.ru 401; qrator_jsid2={_ANTIBOT}; city=spb",
+        f"qrator_jsid={_ANTIBOT}",
+        f"citilink 429, _pcl={_ANTIBOT}",
+        f"u-search 403 with x_wbaas_token={_ANTIBOT}",
+        f"headers: deviceid: site_{_ANTIBOT}",
+        f"deviceid=site_{_ANTIBOT}",
+    ],
+)
+def test_anti_bot_cookies_and_device_ids_are_scrubbed(text):
+    """Cookies a shop hands the anonymous browser are credentials in all but name."""
+    assert _ANTIBOT not in redact_error_text(text)
 
 
 def test_redaction_keeps_the_diagnosis_readable():

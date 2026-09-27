@@ -43,12 +43,15 @@ def _strip_userinfo(url: str) -> str:
     return f"{scheme}{sep}<redacted>@{hostish}"
 
 
-# A whole Cookie header, and any cookie whose name ends in auth/token/session
-# (the WB search token `x_wbaas_token` among them). httpx keeps headers out of
-# exception text, so nothing is known to leak today; this is the belt to that
-# pair of braces.
+# A whole Cookie header, any cookie whose name ends in auth/token/session (the
+# WB search token `x_wbaas_token` among them), the anti-bot cookies shops hand
+# the anonymous browser (Qrator `qrator_jsid*`, Citilink `_pcl`) and the WB
+# `deviceid` that travels with the token.
 _COOKIE_HEADER_RE = re.compile(r"(Cookie:\s*)[^\r\n]+", re.IGNORECASE)
-_COOKIE_PAIR_RE = re.compile(r"\b([A-Za-z0-9_-]*(?:auth|token|session)=)[^;,\s\"']+", re.IGNORECASE)
+_COOKIE_PAIR_RE = re.compile(
+    r"(?<![A-Za-z0-9])((?:[A-Za-z0-9_-]*(?:auth|token|session)|qrator_jsid\d*|_pcl|deviceid)\s*[=:]\s*)[^;,\s\"']+",
+    re.IGNORECASE,
+)
 # A bare JWT, in case one reaches an error string outside a cookie: three
 # base64url segments, the first always starting `eyJ` ({" encoded).
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")

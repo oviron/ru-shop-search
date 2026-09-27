@@ -3,12 +3,12 @@
 Exposed as the ``ozon-mcp`` console script, so MCP client configs can spawn the
 server without knowing where the package lives on disk:
 
-    uv run --frozen --directory /path/to/ru-marketplace-mcp ozon-mcp
+    uv run --frozen --directory /path/to/ru-shop-search ozon-mcp
 
 stdio is the default transport because that is what MCP clients speak. Set
 ``MCP_TRANSPORT=http`` (with optional
 ``MCP_HTTP_HOST``/``MCP_HTTP_PORT``/``MCP_HTTP_PATH``) to run it over HTTP for
-remote deployment instead — see docs/DEPLOYMENT.md. Transport selection lives in
+remote deployment instead — see ``mcp_core.runtime``. Transport selection lives in
 ``mcp_core.runtime`` and writes any diagnostics to stderr; nothing here may write
 to stdout, which the JSON-RPC stream owns.
 """

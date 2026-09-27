@@ -1,14 +1,13 @@
 # Architecture
 
-Fourteen source servers (twelve marketplaces, price comparison, and the
-optional MPStats analytics connector) plus a unified `marketplace-mcp`, all over one shared
-runtime. This document covers how they fit together and why the structure is what it
-is.
+Nine marketplace connectors, price comparison and a unified `marketplace-mcp`, all
+over one shared runtime. This document covers how they fit together and why the
+structure is what it is.
 
 ## Layout
 
 ```
-ru-marketplace-mcp/
+ru-shop-search/
 ├── packages/
 │   ├── mcp-core/               shared runtime — errors, transports, parsing, cache
 │   ├── wb-connector/           Wildberries          → wb-mcp
@@ -16,17 +15,13 @@ ru-marketplace-mcp/
 │   ├── yandex-connector/       Yandex Market        → yandex-mcp
 │   ├── detmir-connector/       Detsky Mir           → detmir-mcp
 │   ├── avito-connector/        Avito classifieds    → avito-mcp
-│   ├── taobao-connector/       Taobao (CN)          → taobao-mcp
-│   ├── megamarket-connector/   Megamarket           → megamarket-mcp
 │   ├── lamoda-connector/       Lamoda               → lamoda-mcp
 │   ├── dns-connector/          DNS-Shop             → dns-mcp
 │   ├── citilink-connector/     Citilink             → citilink-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
-│   ├── cian-connector/         Cian real estate     → cian-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
-│   ├── mpstats-connector/      MPStats analytics (paid, optional) → mpstats-mcp
 │   └── marketplace-connector/  unified mount + CLI  → marketplace-mcp
-├── skills/                  agent-facing usage docs, one per connector
+├── skills/                  agent-facing usage docs
 ├── scripts/                 CDP launchers, stdout guard
 ├── docs/                    this directory
 └── pyproject.toml           uv workspace root
@@ -36,7 +31,7 @@ Each package is independently installable and declares its own dependencies, so 
 user who only wants Wildberries never installs Playwright. `compare-connector`
 depends on the others but imports them defensively — a missing one reduces coverage
 instead of breaking startup. `marketplace-connector` mounts every installed source
-as one namespaced toolset and carries the operator CLI (`install`/`doctor`).
+as one namespaced toolset and carries the operator CLI (`doctor`).
 
 **Why a workspace rather than one package:** the connectors have genuinely
 different dependency needs (Ozon alone needs `curl_cffi` + Playwright), and users
@@ -78,19 +73,16 @@ Redirects are **not** followed by default: several Russian marketplaces answer
 datacenter IPs with a self-referential 307 loop, and following it burns the request
 budget instead of surfacing the block.
 
-**Tier 2, `chrome_cdp`:** the fetch runs inside a Chrome the operator started and
-logged into. This is the answer for sources that reject datacenter fingerprints
-outright, and it is why those sources need no stored credentials. (The optional
-MPStats connector is the one exception: it takes a paid account token via
-`MPSTATS_MP_AUTH`.) Threat model and
-setup: [CDP_SETUP.md](CDP_SETUP.md).
+**Tier 2, `chrome_cdp`:** the fetch runs inside a dedicated anonymous Chrome
+profile. This is the answer for sources that reject non-browser fingerprints
+outright, and it is why those sources need no stored credentials. Setup:
+[CDP_SETUP.md](CDP_SETUP.md).
 
 The CDP dial target is configurable: `CHROME_CDP_HOST` (default `127.0.0.1`) and
 `CHROME_CDP_PORT` (default `9222`). Autostart only fires on loopback — a remote
 host means the operator runs that Chrome themselves (a sidecar, the host's
-browser), and spawning a local one would connect to the wrong profile. This is
-what lets tier 2 work inside Docker, where the container's own `127.0.0.1` never
-holds a browser. `probe_session()` health-checks the session for operator-facing
+browser), and spawning a local one would connect to the wrong profile.
+`probe_session()` health-checks the session for operator-facing
 diagnostics without raising.
 
 Playwright is imported lazily, so a tier-1-only connector never pays for it.
@@ -200,7 +192,7 @@ session, so a crafted path must never become a request for a personal endpoint.
 
 ## Testing
 
-1488 offline tests, no network required. Three flavours:
+Offline tests need no network. Three flavours:
 
 **Unit tests** for pure logic — coercion, merging, ranking, cross-platform process
 handling.
@@ -213,13 +205,13 @@ which error code, which warning, which fields.
 surface.
 
 Live tests are marked (`-m "not live and not cdp"`) and excluded from CI,
-which has neither a Russian-friendly IP nor a logged-in browser. Including them
+which has neither a Russian residential IP nor the browser profile. Including them
 would produce noise instead of signal.
 
-Coverage is branch-measured over the sixteen packages' source and enforced at
+Coverage is branch-measured over the packages' source and enforced at
 a 70 % floor. `scripts/check_coverage_floor.py` measures the offline suite and
 compares it against that floor — the coverage analogue of
-`check_test_count.py`, so a quiet regression surfaces where the change was made
+`check_versions.py`, so a quiet regression surfaces where the change was made
 rather than only in a distant CI run.
 
 ## Adding a marketplace
