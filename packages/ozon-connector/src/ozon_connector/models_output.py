@@ -39,7 +39,7 @@ class OzonCardResponse(BaseModel):
     seller: OzonSellerOut | None = Field(default=None, description="Seller info.")
     characteristics: list[Any] = Field(default_factory=list, description="Short characteristics (max 30).")
     url: str = Field(default="", description="Canonical Ozon product URL.")
-    tier_used: str = Field(default="", description="Fetch tier used: curl_cffi, cdp, etc.")
+    tier_used: str = Field(default="", description="Fetch tier used: cdp, cache, etc.")
     meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")
 
 

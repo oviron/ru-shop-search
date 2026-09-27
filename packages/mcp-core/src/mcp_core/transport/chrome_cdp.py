@@ -19,15 +19,13 @@ including every logged-in session in it. The mitigations, in order of value:
    ``--remote-debugging-address=127.0.0.1``; the port is never exposed to a LAN.
 3. **Scheme guard.** ``open_page`` refuses anything but http(s), so an
    authenticated browser can never be aimed at ``file:///``.
-4. **Caller-side host allowlists.** Each connector validates its own URLs before
-   they reach this module — that is what stops a crafted SKU from turning into a
-   request for ``/api/personal/orders``.
+4. **Host allowlists.** ``open_page`` refuses any host outside ``SHOP_DOMAINS``, and
+   each connector validates its own URLs before they reach this module — that is
+   what stops a crafted SKU from turning into a request for ``/api/personal/orders``.
 
-No credentials are ever stored, read, or transmitted by this code: the operator
-logs in by hand, in a browser they control.
+The profile is anonymous: nothing logs in, and no credentials are stored or read.
 
-Cross-platform: Chrome binaries and profile locations are resolved per platform
-(Windows / macOS / Linux). Window-hiding stealth exists on Windows (window parked
+Cross-platform: Chrome binaries are resolved per platform (Windows / macOS / Linux). Window-hiding stealth exists on Windows (window parked
 off-screen) and macOS (tabs opened in the background, app kept hidden); on Linux
 the browser launches normally, or headless when ``CHROME_HEADLESS=1``.
 """
@@ -52,6 +50,7 @@ from urllib.parse import urlsplit, urlunsplit
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from playwright.async_api import TimeoutError as _PlaywrightTimeoutError
 
+from mcp_core.plugin_data import plugin_data_dir
 from mcp_core.transport.cdp_budget import navigation_budget
 
 # websockets ships with the cdp extra; stay importable without it (the raw-CDP
@@ -87,52 +86,39 @@ def _port_from_env() -> int:
     return port if 1 <= port <= 65535 else 9222
 
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-
-
-def _host_from_env() -> str:
-    """Where the CDP client dials. Defaults to loopback.
-
-    ``CHROME_CDP_HOST`` exists for containers and remote-Chrome setups: a
-    container's own 127.0.0.1 never holds the operator's browser, so pointing
-    at ``host.docker.internal`` or a Chrome sidecar is what makes tier 2 work
-    there. Values are trimmed and must look like a hostname or IP — a malformed
-    one falls back to loopback rather than crashing Playwright with a cryptic
-    URL error.
-    """
-    raw = os.environ.get("CHROME_CDP_HOST", "127.0.0.1").strip()
-    if not raw:
-        return "127.0.0.1"
-    # Reject anything that is clearly not a bare host: schemes, paths,
-    # credentials. "host:9222" is a common mistake — the port is separate.
-    if any(ch in raw for ch in ("/", "@", " ")):
-        return "127.0.0.1"
-    if ":" in raw:
-        # Colons are only legitimate in IPv6 literals: bare (::1) or bracketed.
-        if raw.count(":") > 1 or raw.startswith("["):
-            return raw
-        return "127.0.0.1"
-    return raw
-
-
 CDP_PORT = _port_from_env()
-CDP_HOST = _host_from_env()
+CDP_HOST = "127.0.0.1"
 CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
-CDP_IS_LOOPBACK = CDP_HOST in _LOOPBACK_HOSTS
+
+# Куки анонимного профиля живут там же, где остальные данные плагина.
+SCRAPING_PROFILE = os.environ.get("CHROME_SCRAPING_PROFILE") or str(plugin_data_dir() / "chrome-profile")
+
+# Хосты, куда вкладка профиля вообще может открыться; конкретный коннектор сужает это своим списком.
+SHOP_DOMAINS = frozenset(
+    {
+        "aliexpress.ru",
+        "avito.ru",
+        "citilink.ru",
+        "detmir.ru",
+        "dns-shop.ru",
+        "holodilnik.ru",
+        "lamoda.ru",
+        "market.yandex.ru",
+        "mvideo.ru",
+        "nix.ru",
+        "ozon.ru",
+        "pepper.ru",
+        "regard.ru",
+        "vseinstrumenti.ru",
+        "wildberries.ru",
+    }
+)
 
 
-def _default_profile_dir() -> Path:
-    """Platform-appropriate location for the dedicated scraping profile."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-        return base / "Chrome-Scraping"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Chrome-Scraping"
-    base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-    return base / "chrome-scraping"
+def is_shop_host(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in SHOP_DOMAINS)
 
-
-SCRAPING_PROFILE = os.environ.get("CHROME_SCRAPING_PROFILE", str(_default_profile_dir()))
 
 # Keep the scraping window out of the operator's way without going headless:
 # Windows parks it off-screen, macOS opens tabs in the background and hides the
@@ -144,10 +130,6 @@ STEALTH = os.environ.get("CHROME_STEALTH", "1") != "0"
 # Opt-in headless mode for Linux hosts with no display. Anti-bot systems detect
 # headless Chrome readily, so this stays off by default.
 HEADLESS = os.environ.get("CHROME_HEADLESS", "0") == "1"
-
-# Owned challenge workers hold a guard throughout their lifecycle. Other reads
-# must not hide a profile window while the operator is using a retained tab.
-_HANDOFF_VISIBILITY_GUARDS: set[object] = set()
 
 
 def _chrome_candidates() -> list[str]:
@@ -265,18 +247,10 @@ def _start_chrome_with_cdp() -> tuple[bool, str]:
 
 
 async def _ensure_cdp_running(timeout_s: float = 12.0) -> tuple[bool, str]:
-    """Make sure Chrome is listening on the CDP endpoint, auto-starting if needed.
-
-    Autostart only makes sense on loopback: a remote ``CHROME_CDP_HOST`` means
-    the operator runs Chrome elsewhere (a sidecar, the host's browser), and
-    spawning a local one would connect to the wrong profile.
-    """
+    """Make sure Chrome is listening on the CDP endpoint, auto-starting if needed."""
     async with _AUTOSTART_LOCK:
         if _cdp_port_open():
             return True, "already running"
-
-        if not CDP_IS_LOOPBACK:
-            return False, f"Chrome not reachable on {CDP_HOST}:{CDP_PORT} (remote host — autostart is loopback-only)"
 
         ok, msg = await asyncio.to_thread(_start_chrome_with_cdp)
         if not ok:
@@ -291,6 +265,28 @@ async def _ensure_cdp_running(timeout_s: float = 12.0) -> tuple[bool, str]:
                     await asyncio.to_thread(_hide_chrome_windows)
                 return True, msg
         return False, f"chrome started but CDP did not bind within {timeout_s}s"
+
+
+async def start_browser() -> tuple[bool, str]:
+    """Поднимает Chrome профиля плагина на CDP-порту, если он ещё не слушает."""
+    ok, detail = await _ensure_cdp_running()
+    if ok and STEALTH and sys.platform == "darwin":
+        await asyncio.to_thread(_hide_chrome_windows)
+    return ok, detail
+
+
+async def close_browser() -> bool:
+    """Закрывает Chrome на CDP-порту целиком; False, если там никто не слушает."""
+    ws_url = _browser_ws_url() if _cdp_port_open() else None
+    if ws_url is None or _websockets is None:
+        return False
+    async with _websockets.connect(ws_url, open_timeout=_RAW_CONNECT_TIMEOUT_S) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=5.0)
+        except Exception:
+            pass
+    return True
 
 
 def _scraping_profile_pids() -> set[int]:
@@ -363,8 +359,6 @@ def _hide_chrome_windows() -> None:
     the app the way ⌘H does — the window keeps its Space and never takes focus,
     which is what stops the desktop from switching mid-call.
     """
-    if _HANDOFF_VISIBILITY_GUARDS:
-        return
     if sys.platform == "darwin":
         for pid in _scraping_profile_pids():
             try:
@@ -411,10 +405,7 @@ def _hide_chrome_windows() -> None:
 
 
 def cdp_setup_hint() -> str:
-    """Platform-appropriate one-liner for getting CDP running."""
-    if sys.platform == "win32":
-        return "run scripts/start_chrome_cdp.ps1 (PowerShell)"
-    return "run scripts/start_chrome_cdp.sh"
+    return "run `uv run marketplace-mcp browser` or scripts/start_chrome_cdp.sh"
 
 
 class _CdpConnectTimeout(RuntimeError):
@@ -489,6 +480,24 @@ class NavBlocked(RuntimeError):
         super().__init__(f"navigation blocked: HTTP {status}")
 
 
+_NAV_STATUS_JS = "() => performance.getEntriesByType('navigation')[0]?.responseStatus ?? 0"
+
+
+async def _challenge_cleared(page: PageLike, status: int | None, grace_s: float) -> bool:
+    """Ждёт, пока антибот-страница с 403 сама перезагрузится в 200; сами мы ничего не шлём."""
+    if status != 403 or grace_s <= 0:
+        return False
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.5)
+        try:
+            if await page.evaluate(_NAV_STATUS_JS) == 200:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def probe_session(*, timeout_s: float = 15.0) -> dict[str, object]:
     """Health-check the CDP session itself, for operator-facing diagnostics.
 
@@ -501,12 +510,10 @@ async def probe_session(*, timeout_s: float = 15.0) -> dict[str, object]:
     on a Chrome that Playwright cannot handshake, the attach must fail first so
     the raw-CDP reachability verdict can be reported instead of a bare timeout.
     """
-    result: dict[str, object] = {"host": CDP_HOST, "port": CDP_PORT, "is_loopback": CDP_IS_LOOPBACK}
+    result: dict[str, object] = {"host": CDP_HOST, "port": CDP_PORT}
     if not _cdp_port_open():
         result["reachable"] = False
-        result["reason"] = f"nothing listening on {CDP_HOST}:{CDP_PORT}" + (
-            " — autostart is loopback-only" if not CDP_IS_LOOPBACK else f" ({cdp_setup_hint()})"
-        )
+        result["reason"] = f"nothing listening on {CDP_HOST}:{CDP_PORT} ({cdp_setup_hint()})"
         return result
     try:
         async with asyncio.timeout(timeout_s):
@@ -568,8 +575,7 @@ def _browser_ws_url() -> str | None:
     ws = data.get("webSocketDebuggerUrl")
     if not isinstance(ws, str) or not ws.startswith("ws"):
         return None
-    # The endpoint advertises its own loopback address even when we reached it
-    # through CHROME_CDP_HOST — redial the host we know answers.
+    # The endpoint may advertise another loopback spelling; redial the one we know answers.
     parts = urlsplit(ws)
     return urlunsplit(parts._replace(netloc=f"{CDP_HOST}:{CDP_PORT}"))
 
@@ -689,7 +695,7 @@ class _RawCdpPage:
 
 
 @asynccontextmanager
-async def _raw_cdp_page(url: str, wait_ms: int) -> AsyncIterator[_RawCdpPage]:
+async def _raw_cdp_page(url: str, wait_ms: int, challenge_grace_s: float = 0.0) -> AsyncIterator[_RawCdpPage]:
     """Open a tab over raw CDP, mirroring open_page's guarantees."""
     if _websockets is None:
         raise RuntimeError("the raw-CDP fallback needs the 'websockets' package (cdp extra)")
@@ -740,7 +746,7 @@ async def _raw_cdp_page(url: str, wait_ms: int) -> AsyncIterator[_RawCdpPage]:
                 await page._send("Network.enable", timeout=_RAW_CONNECT_TIMEOUT_S)
                 await page._send("Runtime.enable", timeout=_RAW_CONNECT_TIMEOUT_S)
                 status = await page.goto_and_status(url)
-                if status in _NAV_FAIL_STATUSES:
+                if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(page, status, challenge_grace_s):
                     raise NavBlocked(status, page.url)
                 if wait_ms > 0:
                     await asyncio.sleep(wait_ms / 1000)
@@ -823,13 +829,13 @@ async def _new_tab(ctx: BrowserContext) -> Page:
 
 
 @asynccontextmanager
-async def _playwright_page(url: str, wait_ms: int = 5000) -> AsyncIterator[Page]:
+async def _playwright_page(url: str, wait_ms: int = 5000, challenge_grace_s: float = 0.0) -> AsyncIterator[Page]:
     async with get_context() as ctx:
         page = await asyncio.wait_for(_new_tab(ctx), timeout=_TAB_OP_TIMEOUT_S)
         try:
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
             status = resp.status if resp is not None else None
-            if status in _NAV_FAIL_STATUSES:
+            if status in _NAV_FAIL_STATUSES and not await _challenge_cleared(page, status, challenge_grace_s):
                 final = ""
                 try:
                     final = page.url
@@ -875,20 +881,22 @@ async def open_page(
     wait_ms: int = 5000,
     *,
     allowed_hosts: Collection[str] | None = None,
+    challenge_grace_s: float = 0.0,
 ) -> AsyncIterator[PageLike]:
     """Open a tab on ``url`` in the operator's Chrome, yield it, then close it.
 
     Guarantees:
       * non-http(s) schemes are refused outright (scheme guard);
       * a block/auth/5xx main document raises ``NavBlocked`` rather than
-        yielding a page that only looks like content;
+        yielding a page that only looks like content; with ``challenge_grace_s``
+        a 403 antibot page that reloads itself into a 200 within that time passes;
       * tab creation, navigation and teardown are individually bounded, so a
         wedged CDP session cannot hang a tool call indefinitely;
       * when Playwright cannot finish its attach handshake (Chrome >= 151),
         the same tab lifecycle runs over raw CDP instead.
 
-    Host allowlisting stays the caller's responsibility — each connector knows
-    which paths are legitimate for its marketplace.
+    Only ``SHOP_DOMAINS`` hosts open at all; which paths are legitimate stays the
+    connector's call.
 
     Concurrency is bounded here rather than by each connector: a fan-out over
     several CDP sources used to drive every tab through one Chrome at once and
@@ -898,12 +906,14 @@ async def open_page(
 
     The permit covers the navigation, not the page: it is released as soon as
     the document is up, because a caller may hold the yielded page for minutes
-    (a retained challenge page waits for a human). Holding a host's slot for
+    (a slow extractor). Holding a host's slot for
     that long would queue every other navigation behind it.
     """
     low = (url or "").strip().lower()
     if not (low.startswith("http://") or low.startswith("https://")):
         raise ValueError("open_page refuses a non-http(s) URL (scheme guard)")
+    if not is_shop_host(urlsplit(url).hostname or ""):
+        raise ValueError("open_page refuses a host outside SHOP_DOMAINS")
     # Default to the origin host. Callers may list a small explicit set for
     # marketplace aliases (for example www + bare host), but redirects to an
     # arbitrary host are never allowed to drive the authenticated profile.
@@ -916,9 +926,9 @@ async def open_page(
     page: PageLike
     try:
         try:
-            page = await stack.enter_async_context(_playwright_page(url, wait_ms))
+            page = await stack.enter_async_context(_playwright_page(url, wait_ms, challenge_grace_s))
         except _CdpConnectTimeout:
-            page = await stack.enter_async_context(_raw_cdp_page(url, wait_ms))
+            page = await stack.enter_async_context(_raw_cdp_page(url, wait_ms, challenge_grace_s))
         _check_final_host(page.url, host_policy)
         permit.ok()
     except NavBlocked as exc:

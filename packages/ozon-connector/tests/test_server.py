@@ -1,33 +1,13 @@
 import asyncio
 import json
-import os
-import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
+from mcp_core.stopgate import SourceStoppedError
 from ozon_connector import server
-from pydantic import SecretStr
-
-# Every _sync_call_in_process call in this module boots a brand-new interpreter,
-# and that cost belongs to the host rather than to the code under test: a loaded
-# windows-latest runner was measured spending over 2s on the spawn and teardown
-# alone, on a leg that took 110s to run a suite Linux finishes in 8s. The tests
-# below assert behaviour — the timeout fires, the child's env is scrubbed, error
-# text is redacted — and never latency, so their budget is deliberately far larger
-# than any plausible spawn. A tight budget here proves nothing; it only lets
-# runner load turn the build red.
-CHILD_SPAWN_BUDGET_S = 30.0
-
-# What the timeout test actually needs is a child that outlives its deadline by so
-# much that "the timeout was enforced" and "we waited for the child" cannot be
-# confused by a slow spawn. The old pairing — a 5s child under a 2s ceiling — left
-# only ~3s of headroom for spawn overhead that has since been seen above 2s, so it
-# failed at 2.079s while the timeout was working perfectly.
-_TIMEOUT_CHILD_SLEEP_S = 60.0
-_TIMEOUT_RETURN_CEILING_S = 20.0
 
 
 def test_server_version_matches_pyproject():
@@ -39,8 +19,10 @@ def test_server_version_matches_pyproject():
 def clear_cache():
     """Composer reads are cached, so scenarios must not inherit each other's bodies."""
     server._cache.clear()
+    server._pacer.reset()
     yield
     server._cache.clear()
+    server._pacer.reset()
 
 
 def _run(coro):
@@ -70,67 +52,6 @@ def _reviews_body(*, reviews=None, next_button=None):
             },
         }
     )
-
-
-def test_sync_call_in_process_times_out_and_next_call_still_works():
-    start = time.monotonic()
-    try:
-        server._sync_call_in_process(time.sleep, (_TIMEOUT_CHILD_SLEEP_S,), 0.05)
-    except server._SyncCallTimeout:
-        pass
-    else:
-        raise AssertionError("slow child must time out")
-    elapsed = time.monotonic() - start
-
-    # The point of the clock here is to catch a timeout that stopped cutting the
-    # child short — that regression waits out the full sleep and blows the ceiling
-    # by 40s, so a generous ceiling costs no sensitivity. Report the measurement on
-    # failure: the previous bare assert made a slow runner look like a broken one.
-    assert elapsed < _TIMEOUT_RETURN_CEILING_S, (
-        f"timeout was not enforced: returned after {elapsed:.2f}s, "
-        f"ceiling {_TIMEOUT_RETURN_CEILING_S}s, child sleep {_TIMEOUT_CHILD_SLEEP_S}s"
-    )
-    # A killed child must not poison the next call — that is the "still works" half
-    # of this test, and it needs the full spawn budget for the same reason as above.
-    assert server._sync_call_in_process(abs, (-3,), CHILD_SPAWN_BUDGET_S) == 3
-
-
-def test_sync_call_in_process_scrubs_child_env(monkeypatch):
-    monkeypatch.setenv("OZON_SENTINEL_SECRET", "leak")
-
-    assert server._sync_call_in_process(os.getenv, ("OZON_SENTINEL_SECRET",), CHILD_SPAWN_BUDGET_S) is None
-
-
-def test_sync_call_in_process_redacts_url_userinfo_from_child_errors():
-    try:
-        server._sync_call_in_process(
-            exec,
-            ("raise RuntimeError('https://user:secret@example.com/path?token=x')",),
-            CHILD_SPAWN_BUDGET_S,
-        )
-    except server._SyncCallError as exc:
-        message = str(exc)
-    else:
-        raise AssertionError("child exception expected")
-
-    assert "user:secret" not in message
-    assert "token=x" not in message
-    assert "<redacted-query>" in message
-
-
-def test_run_sync_bounded_rejects_local_callables():
-    async def scenario():
-        def local():
-            return 1
-
-        try:
-            await server._run_sync_bounded(local, timeout_s=0.1)
-        except server._SyncCallError:
-            pass
-        else:
-            raise AssertionError("local callable must not fall back to to_thread")
-
-    asyncio.run(scenario())
 
 
 def test_canonical_composer_path_rejects_unsafe_search_query_keys():
@@ -314,32 +235,6 @@ def test_safe_review_page_path_rejects_non_string_next_button():
     assert server._safe_review_page_path("123", ["?page=2"]) is None
 
 
-def test_sync_curl_get_closes_non_context_manager_response(monkeypatch):
-    class FakeResponse:
-        status_code = 200
-        encoding = "utf-8"
-        closed = False
-
-        def iter_content(self, chunk_size):
-            yield b'{"ok": true}'
-
-        def close(self):
-            self.closed = True
-
-    fake = FakeResponse()
-
-    def fake_get(*args, **kwargs):
-        return fake
-
-    monkeypatch.setattr(server.cffi, "get", fake_get)
-
-    status, body = server._sync_curl_get("https://www.ozon.ru/api/test")
-
-    assert status == 200
-    assert body == '{"ok": true}'
-    assert fake.closed is True
-
-
 def test_cdp_fetch_json_times_out_open_page_and_releases_lock(monkeypatch):
     class HangingOpenPage:
         async def __aenter__(self):
@@ -366,53 +261,6 @@ def test_cdp_fetch_json_times_out_open_page_and_releases_lock(monkeypatch):
     _run(scenario())
 
 
-def test_fetch_composer_times_out_blocking_curl_and_falls_back_to_cdp(monkeypatch):
-    def blocking_get(url):
-        time.sleep(0.3)
-        return 200, '{"from": "curl"}'
-
-    async def fake_cdp(api_url, ctx):
-        return 200, '{"from": "cdp"}'
-
-    async def scenario():
-        monkeypatch.setattr(server, "TIMEOUT", 0.01)
-        monkeypatch.setattr(server, "_min_gap", 0)
-        monkeypatch.setattr(server, "_sync_curl_get", blocking_get)
-        monkeypatch.setattr(server, "_cdp_fetch_json", fake_cdp)
-
-        status, body, tier = await asyncio.wait_for(
-            server._fetch_composer("/product/123/", None),
-            timeout=0.2,
-        )
-
-        assert status == 200
-        assert json.loads(body) == {"from": "cdp"}
-        assert tier == "cdp"
-
-    _run(scenario())
-
-
-def test_fetch_composer_reports_cdp_navigation_block_as_blocked(monkeypatch):
-    def blocked_get(url):
-        return 403, "<html>challenge</html>"
-
-    async def blocked_cdp(api_url, ctx):
-        raise server.NavBlocked(403, "https://www.ozon.ru/")
-
-    async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        monkeypatch.setattr(server, "_sync_curl_get", blocked_get)
-        monkeypatch.setattr(server, "_cdp_fetch_json", blocked_cdp)
-
-        status, body, tier = await server._fetch_composer("/product/123/", None)
-
-        assert status == 403
-        assert "navigation blocked" in body
-        assert tier == "cdp_blocked"
-
-    _run(scenario())
-
-
 def test_ozon_search_reports_actionable_cdp_block(monkeypatch):
     async def blocked_fetch(path, ctx):
         return 403, "navigation blocked: HTTP 403", "cdp_blocked"
@@ -425,8 +273,8 @@ def test_ozon_search_reports_actionable_cdp_block(monkeypatch):
         msg = str(excinfo.value)
 
         assert "transport_down" in msg
-        assert "browser session is blocked" in msg
-        assert "solve any captcha" in msg
+        assert "Ozon is stopped, do not retry" in msg
+        assert "resume ozon" in msg
         assert "cdp_blocked" in msg
         assert "403" in msg
 
@@ -776,144 +624,85 @@ def test_reviews_tolerates_malformed_uuid_next_button_and_score(monkeypatch):
     _run(scenario())
 
 
-def _patch_tier1(monkeypatch, impl):
-    """Route tier-1 through ``impl`` directly.
+def _patch_tab(monkeypatch, impl):
+    """Route the tab fetch through ``impl``; returns the call counter."""
+    calls = {"n": 0}
 
-    ``_run_sync_bounded`` executes its target in a subprocess by module+qualname,
-    so a locally-defined test double is deliberately rejected as un-callable.
-    Patching the runner itself is the seam that lets a test drive tier-1 to a
-    *success*; patching ``_sync_curl_get`` alone only ever exercises the
-    fall-through to CDP.
-    """
+    async def fake_cdp(api_url, ctx):
+        calls["n"] += 1
+        result = impl(calls["n"])
+        if isinstance(result, Exception):
+            raise result
+        return result
 
-    async def fake_runner(func, *args, timeout_s):
-        return impl(*args)
+    monkeypatch.setattr(server, "_min_gap", 0)
+    monkeypatch.setattr(server, "_cdp_fetch_json", fake_cdp)
+    return calls
 
-    monkeypatch.setattr(server, "_run_sync_bounded", fake_runner)
+
+def test_fetch_composer_reads_through_the_tab_only(monkeypatch):
+    calls = _patch_tab(monkeypatch, lambda n: (200, '{"widgetStates": {}}'))
+
+    status, _, tier = _run(server._fetch_composer("/product/123/", None))
+
+    assert (status, tier, calls["n"]) == (200, "cdp", 1)
 
 
 def test_fetch_composer_serves_a_repeat_read_from_cache(monkeypatch):
-    """A cache hit skips a Cloudflare challenge and a whole CDP round-trip."""
-    calls = {"n": 0}
-
-    def counting_get(url, proxy=None):
-        calls["n"] += 1
-        return 200, '{"widgetStates": {}}'
+    """A cache hit skips a whole browser round-trip."""
+    calls = _patch_tab(monkeypatch, lambda n: (200, '{"widgetStates": {}}'))
 
     async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        _patch_tier1(monkeypatch, counting_get)
+        await server._fetch_composer("/product/123/", None)
+        return await server._fetch_composer("/product/123/", None)
 
-        first = await server._fetch_composer("/product/123/", None)
-        second = await server._fetch_composer("/product/123/", None)
-
-        assert first[0] == 200 and first[2] == "curl_cffi"
-        assert second[0] == 200
-        assert second[2] == "cache", "a repeat read must be reported as served from cache"
-        assert calls["n"] == 1
-
-    _run(scenario())
-
-
-def test_fetch_composer_does_not_cache_a_block(monkeypatch):
-    """A cached 403 would keep reporting a block after the challenge cleared."""
-    attempts = {"n": 0}
-
-    def blocked_then_ok(url, proxy=None):
-        attempts["n"] += 1
-        if attempts["n"] == 1:
-            return 403, "<html>challenge</html>"
-        return 200, '{"widgetStates": {}}'
-
-    async def failing_cdp(api_url, ctx):
-        raise server.NavBlocked(403, "https://www.ozon.ru/")
-
-    async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        _patch_tier1(monkeypatch, blocked_then_ok)
-        monkeypatch.setattr(server, "_cdp_fetch_json", failing_cdp)
-
-        status, _, tier = await server._fetch_composer("/product/123/", None)
-        assert status == 403 and tier == "cdp_blocked"
-
-        # The block must not have been stored: the retry reaches tier 1 again.
-        status, _, tier = await server._fetch_composer("/product/123/", None)
-        assert (status, tier) == (200, "curl_cffi")
-        assert attempts["n"] == 2
-
-    _run(scenario())
-
-
-def test_fetch_composer_caches_a_successful_cdp_body(monkeypatch):
-    """CDP is the expensive tier, so its successes are exactly what caching is for."""
-    cdp_calls = {"n": 0}
-
-    def always_blocked(url, proxy=None):
-        return 403, "<html>challenge</html>"
-
-    async def ok_cdp(api_url, ctx):
-        cdp_calls["n"] += 1
-        return 200, '{"widgetStates": {}}'
-
-    async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        _patch_tier1(monkeypatch, always_blocked)
-        monkeypatch.setattr(server, "_cdp_fetch_json", ok_cdp)
-
-        first = await server._fetch_composer("/product/123/", None)
-        second = await server._fetch_composer("/product/123/", None)
-
-        assert first[2] == "cdp"
-        assert second[2] == "cache"
-        assert cdp_calls["n"] == 1
-
-    _run(scenario())
+    assert _run(scenario())[2] == "cache"
+    assert calls["n"] == 1
 
 
 def test_cache_is_keyed_by_canonical_path_not_raw_input(monkeypatch):
     """Two spellings of the same product must share one cache entry."""
-    calls = {"n": 0}
-
-    def counting_get(url, proxy=None):
-        calls["n"] += 1
-        return 200, '{"widgetStates": {}}'
+    calls = _patch_tab(monkeypatch, lambda n: (200, '{"widgetStates": {}}'))
 
     async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        _patch_tier1(monkeypatch, counting_get)
-
         await server._fetch_composer("/product/123/", None)
-        # Same product, no trailing slash: canonicalisation collapses them.
-        _, _, tier = await server._fetch_composer("/product/123", None)
+        return await server._fetch_composer("/product/123", None)
 
-        assert tier == "cache"
-        assert calls["n"] == 1
-
-    _run(scenario())
+    assert _run(scenario())[2] == "cache"
+    assert calls["n"] == 1
 
 
-def test_tier1_proxy_is_passed_as_an_argument_not_an_env_var(monkeypatch):
-    """safe_child_env strips proxy vars, so the value must travel as an argument."""
-    seen = {}
+def test_fetch_composer_reports_a_navigation_block(monkeypatch):
+    _patch_tab(monkeypatch, lambda n: server.NavBlocked(403, "https://www.ozon.ru/"))
 
-    def capturing_get(url, proxy=None):
-        seen["proxy"] = proxy
-        return 200, '{"widgetStates": {}}'
+    status, body, tier = _run(server._fetch_composer("/product/123/", None))
+
+    assert (status, tier) == (403, "cdp_blocked")
+    assert "navigation blocked" in body
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [(403, "<html>Antibot Challenge Page</html>"), (429, "slow down"), server.NavBlocked(403, "https://www.ozon.ru/")],
+)
+def test_a_refusal_stops_ozon_and_is_not_cached(monkeypatch, refusal):
+    calls = _patch_tab(monkeypatch, lambda n: refusal)
 
     async def scenario():
-        monkeypatch.setattr(server, "_min_gap", 0)
-        monkeypatch.setattr(server._settings, "proxy", SecretStr("http://ozon-proxy:8080"))
-        _patch_tier1(monkeypatch, capturing_get)
-
         await server._fetch_composer("/product/123/", None)
-
-        assert seen["proxy"] == "http://ozon-proxy:8080"
+        with pytest.raises(SourceStoppedError):
+            await server._fetch_composer("/product/123/", None)
 
     _run(scenario())
+    assert calls["n"] == 1
 
 
-def test_ozon_proxy_falls_back_to_standard_variables(monkeypatch):
-    monkeypatch.setattr(server._settings, "proxy", SecretStr(""))
-    monkeypatch.delenv("OZON_PROXY", raising=False)
-    monkeypatch.setenv("HTTPS_PROXY", "http://generic:8080")
-    assert server._proxy() == "http://generic:8080"
+def test_a_dead_browser_does_not_stop_ozon(monkeypatch):
+    calls = _patch_tab(monkeypatch, lambda n: (0, "CDP timeout after 20s"))
+
+    async def scenario():
+        await server._fetch_composer("/product/123/", None)
+        await server._fetch_composer("/product/123/", None)
+
+    _run(scenario())
+    assert calls["n"] == 2

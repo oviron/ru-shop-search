@@ -26,11 +26,18 @@ claude plugin install ru-shop-search@ru-shop-search
 ```
 
 Плагин поднимает один MCP-сервер (`uv run marketplace-mcp`). Магазинам, которые пускают
-только браузер, нужен отдельный анонимный профиль Chrome с CDP на `127.0.0.1`:
+только браузер, нужен отдельный анонимный профиль Chrome с CDP на `127.0.0.1`. Сервер
+запускает его сам; открыть заранее или закрыть можно так:
 
 ```bash
-scripts/start_chrome_cdp.sh
+uv run marketplace-mcp browser
 ```
+
+```bash
+uv run marketplace-mcp browser stop
+```
+
+Подробности: [docs/CDP_SETUP.md](docs/CDP_SETUP.md).
 
 ## Что умеет
 

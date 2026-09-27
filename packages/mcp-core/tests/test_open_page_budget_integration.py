@@ -17,8 +17,8 @@ import pytest
 from mcp_core.transport import chrome_cdp
 from mcp_core.transport.cdp_budget import budget_snapshot
 
-URL = "https://shop.test/search?q=a"
-OTHER = "https://other.test/search?q=a"
+URL = "https://www.ozon.ru/search?q=a"
+OTHER = "https://www.lamoda.ru/search?q=a"
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def fake_browser(monkeypatch):
     """A page object just real enough for open_page: it reads only ``.url``."""
     opened: list[str] = []
 
-    def factory(url, wait_ms):
+    def factory(url, wait_ms, challenge_grace_s=0.0):
         @asynccontextmanager
         async def cm():
             opened.append(url)
@@ -66,7 +66,7 @@ async def test_a_navigation_that_succeeds_does_not_trip_the_breaker(fake_browser
         async with chrome_cdp.open_page(URL):
             pass
 
-    assert budget_snapshot()["hosts"]["shop.test"]["open"] is False
+    assert budget_snapshot()["hosts"]["www.ozon.ru"]["open"] is False
 
 
 async def test_different_hosts_are_independent(fake_browser):
@@ -74,7 +74,7 @@ async def test_different_hosts_are_independent(fake_browser):
         async with chrome_cdp.open_page(OTHER):
             pass
 
-    assert set(budget_snapshot()["hosts"]) == {"shop.test", "other.test"}
+    assert set(budget_snapshot()["hosts"]) == {"www.ozon.ru", "www.lamoda.ru"}
 
 
 async def test_a_non_http_url_is_refused_before_any_permit_is_taken(fake_browser):

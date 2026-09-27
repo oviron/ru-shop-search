@@ -46,94 +46,36 @@ def test_the_valid_port_range_is_inclusive(monkeypatch, edge):
     assert chrome_cdp._port_from_env() == int(edge)
 
 
-# ------------------------------------------------------------------- host ----
+# ---------------------------------------------------------- host policy ----
 
 
-def test_host_defaults_to_loopback_when_unset(monkeypatch):
-    monkeypatch.delenv("CHROME_CDP_HOST", raising=False)
-    assert chrome_cdp._host_from_env() == "127.0.0.1"
+def test_cdp_host_is_always_loopback():
+    assert chrome_cdp.CDP_HOST == "127.0.0.1"
 
 
-def test_host_reads_the_environment(monkeypatch):
-    monkeypatch.setenv("CHROME_CDP_HOST", "host.docker.internal")
-    assert chrome_cdp._host_from_env() == "host.docker.internal"
+@pytest.mark.parametrize("host", ["www.ozon.ru", "ozon.ru", "market.yandex.ru", "www.dns-shop.ru", "WWW.LAMODA.RU."])
+def test_shop_hosts_are_allowed(host):
+    assert chrome_cdp.is_shop_host(host)
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "",
-        "http://127.0.0.1",
-        "127.0.0.1:9222",
-        "user:pass@proxy",
-        "127.0.0.1/path",
-        "127 .0.0.1",
-    ],
-)
-def test_a_malformed_host_falls_back_to_loopback(monkeypatch, bad):
-    """A host with a scheme, port, credentials or path must never reach the dialer."""
-    monkeypatch.setenv("CHROME_CDP_HOST", bad)
-    assert chrome_cdp._host_from_env() == "127.0.0.1"
+@pytest.mark.parametrize("host", ["", "example.com", "evilozon.ru", "ozon.ru.evil.com", "yandex.ru", "mail.ru"])
+def test_foreign_hosts_are_refused(host):
+    assert not chrome_cdp.is_shop_host(host)
 
 
-def test_an_ipv6_host_with_colons_is_kept(monkeypatch):
-    monkeypatch.setenv("CHROME_CDP_HOST", "::1")
-    assert chrome_cdp._host_from_env() == "::1"
+def test_open_page_refuses_a_foreign_host_before_touching_chrome():
+    import asyncio
+
+    async def go():
+        async with chrome_cdp.open_page("https://example.com/"):
+            pass
+
+    with pytest.raises(ValueError, match="SHOP_DOMAINS"):
+        asyncio.run(go())
 
 
-def test_cdp_url_uses_the_configured_host(monkeypatch):
-    """The module-level URL is built at import time; rebuild it from the helpers."""
-    monkeypatch.setenv("CHROME_CDP_HOST", "chrome-sidecar")
-    monkeypatch.setenv("CHROME_CDP_PORT", "9223")
-    host = chrome_cdp._host_from_env()
-    port = chrome_cdp._port_from_env()
-    assert f"http://{host}:{port}" == "http://chrome-sidecar:9223"
-
-
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
-def test_loopback_hosts_are_recognised(host):
-    assert host in chrome_cdp._LOOPBACK_HOSTS
-
-
-# ---------------------------------------------------------- profile paths ----
-
-
-def test_windows_profile_dir_uses_localappdata(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "win32")
-    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\op\AppData\Local")
-
-    result = chrome_cdp._default_profile_dir()
-
-    assert result == Path(r"C:\Users\op\AppData\Local") / "Chrome-Scraping"
-
-
-def test_windows_profile_dir_falls_back_to_home_without_localappdata(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "win32")
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-
-    assert chrome_cdp._default_profile_dir().name == "Chrome-Scraping"
-
-
-def test_macos_profile_dir_uses_application_support(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "darwin")
-
-    result = chrome_cdp._default_profile_dir()
-
-    assert result == Path.home() / "Library" / "Application Support" / "Chrome-Scraping"
-
-
-def test_linux_profile_dir_honours_xdg_data_home(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "linux")
-    monkeypatch.setenv("XDG_DATA_HOME", "/custom/share")
-
-    assert chrome_cdp._default_profile_dir() == Path("/custom/share/chrome-scraping")
-
-
-def test_linux_profile_dir_defaults_to_local_share(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "linux")
-    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-
-    assert chrome_cdp._default_profile_dir() == Path.home() / ".local" / "share" / "chrome-scraping"
+def test_the_profile_lives_in_the_plugin_data_dir():
+    assert Path(chrome_cdp.SCRAPING_PROFILE).name == "chrome-profile"
 
 
 # ------------------------------------------------------ chrome candidates ----
@@ -218,29 +160,12 @@ def test_linux_candidates_prefer_a_resolved_path_over_a_guess(monkeypatch):
 # ------------------------------------------------------------ setup hints ----
 
 
-def test_setup_hint_names_the_powershell_script_on_windows(monkeypatch):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", "win32")
-
+def test_setup_hint_points_at_the_cli_and_a_script_that_exists():
     hint = chrome_cdp.cdp_setup_hint()
-
-    assert "start_chrome_cdp.ps1" in hint
-    assert ".sh" not in hint
-
-
-@pytest.mark.parametrize("platform", ["linux", "darwin"])
-def test_setup_hint_names_the_shell_script_elsewhere(monkeypatch, platform):
-    monkeypatch.setattr(chrome_cdp.sys, "platform", platform)
-
-    hint = chrome_cdp.cdp_setup_hint()
-
-    assert "start_chrome_cdp.sh" in hint
-
-
-def test_setup_hint_points_at_a_script_that_exists():
-    """A hint naming a missing script would send the operator nowhere."""
     repo_root = Path(__file__).resolve().parents[3]
+
+    assert "marketplace-mcp browser" in hint
     assert (repo_root / "scripts" / "start_chrome_cdp.sh").is_file()
-    assert (repo_root / "scripts" / "start_chrome_cdp.ps1").is_file()
 
 
 # -------------------------------------------------------------- find chrome ----
@@ -369,6 +294,58 @@ def test_nav_blocked_carries_the_status_and_url():
     exc = chrome_cdp.NavBlocked(403, "https://www.ozon.ru/product/1/")
     assert exc.status == 403
     assert "403" in str(exc)
+
+
+class _StatusPage:
+    """A tab whose navigation status moves through the given values, one per poll."""
+
+    def __init__(self, *statuses):
+        self.statuses = list(statuses)
+        self.polls = 0
+
+    url = "https://www.ozon.ru/?__rr=1"
+
+    async def evaluate(self, expression, arg=None):
+        self.polls += 1
+        value = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+@pytest.fixture
+def instant_sleep(monkeypatch):
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(chrome_cdp.asyncio, "sleep", lambda _s: real_sleep(0))
+
+
+def test_a_403_challenge_that_reloads_into_200_passes(instant_sleep):
+    import asyncio
+
+    page = _StatusPage(403, RuntimeError("context destroyed"), 200)
+
+    assert asyncio.run(chrome_cdp._challenge_cleared(page, 403, grace_s=5)) is True
+
+
+def test_a_403_that_stays_403_is_a_refusal_after_the_grace(instant_sleep, monkeypatch):
+    import asyncio
+
+    clock = iter(range(100))
+    monkeypatch.setattr(chrome_cdp.time, "monotonic", lambda: next(clock))
+
+    assert asyncio.run(chrome_cdp._challenge_cleared(_StatusPage(403), 403, grace_s=5)) is False
+
+
+@pytest.mark.parametrize(("status", "grace"), [(429, 5.0), (401, 5.0), (403, 0.0)])
+def test_no_grace_for_other_refusals_or_when_not_asked(status, grace):
+    import asyncio
+
+    page = _StatusPage(200)
+
+    assert asyncio.run(chrome_cdp._challenge_cleared(page, status, grace_s=grace)) is False
+    assert page.polls == 0
 
 
 def test_socket_module_is_the_real_one():

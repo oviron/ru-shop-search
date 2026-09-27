@@ -219,8 +219,14 @@ redirect loop (`?...&__rr=1`, `__rr=2`, …). curl follows it until it hits its
 redirect ceiling. TLS impersonation alone does not clear it.
 
 The working answer is not a better fingerprint but a different vantage point: run
-the fetch **inside a browser the operator already logged into**, over the DevTools
-Protocol. That is tier 2. Setup and threat model: [CDP_SETUP.md](CDP_SETUP.md).
+the fetch inside a real browser over the DevTools Protocol. Setup and threat model:
+[CDP_SETUP.md](CDP_SETUP.md).
+
+> Проверено 2026-09-27 с домашнего IP, свежий анонимный профиль, без логина: главный
+> документ `www.ozon.ru` отдаёт `403 Antibot Challenge Page`, через ~1 с вкладка сама
+> перезагружается в 200, после этого `fetch` composer-api из вкладки отдаёт поиск.
+> HTTP-уровень у коннектора убран: он всегда получал 307 и 403, то есть лишний отказ
+> перед вкладкой.
 
 Ozon's seller pages were spiked for v1.1.0 and deliberately left out — see
 [the seller-details refusal](#the-ozon-seller-details-refusal-v110).

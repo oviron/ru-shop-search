@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from marketplace_connector import cli
+from mcp_core import stopgate
 from mcp_core.stopgate import StopGate
 
 
@@ -247,6 +248,7 @@ def test_detail_reads_model_objects_as_well_as_dicts():
 def plugin_data(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(stopgate, "_default", None)
     data = tmp_path / ".claude/plugins/data/ru-shop-search-inline"
     data.mkdir(parents=True)
     return data
@@ -287,3 +289,41 @@ def test_doctor_skips_a_stopped_source(plugin_data, monkeypatch, capsys):
 
     assert called == ["dns"]
     assert "stopped" in capsys.readouterr().out
+
+
+@pytest.fixture
+def fake_browser(monkeypatch):
+    from mcp_core.transport import chrome_cdp
+
+    calls = []
+
+    async def start():
+        calls.append("start")
+        return True, "started chrome"
+
+    async def close():
+        calls.append("stop")
+        return False
+
+    monkeypatch.setattr(chrome_cdp, "start_browser", start)
+    monkeypatch.setattr(chrome_cdp, "close_browser", close)
+    return calls
+
+
+def test_browser_starts_the_profile_by_default(fake_browser, capsys):
+    assert cli.main(["browser"]) == 0
+
+    assert fake_browser == ["start"]
+    assert "127.0.0.1" in capsys.readouterr().out
+
+
+def test_browser_stop_is_quiet_when_nothing_listens(fake_browser, capsys):
+    assert cli.main(["browser", "stop"]) == 0
+
+    assert fake_browser == ["stop"]
+    assert "nothing listening" in capsys.readouterr().out
+
+
+def test_browser_rejects_an_unknown_action(fake_browser, capsys):
+    assert cli.main(["browser", "restart"]) == 2
+    assert fake_browser == []

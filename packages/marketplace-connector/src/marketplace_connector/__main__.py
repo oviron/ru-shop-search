@@ -11,7 +11,7 @@ import sys
 
 
 def main() -> int:
-    """Run the server, or the operator CLI (doctor, stops, resume) when a subcommand is given.
+    """Run the server, or the operator CLI (doctor, stops, resume, browser) when a subcommand is given.
 
     Subcommands go to stdout freely — only the server path owns the JSON-RPC stream.
     """

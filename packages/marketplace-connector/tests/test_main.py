@@ -27,7 +27,7 @@ def test_unknown_argument_exits_with_error(argument, monkeypatch, capsys, no_ser
     assert "unknown command" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command", ["doctor", "stops", "resume"])
+@pytest.mark.parametrize("command", ["doctor", "stops", "resume", "browser"])
 def test_operator_subcommands_forward_their_arguments(command, monkeypatch, no_server_start):
     received = []
 

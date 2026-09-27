@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +15,7 @@ from pathlib import Path
 from fastmcp.exceptions import ToolError
 
 from mcp_core.errors import ConnectorError, ErrorCode
+from mcp_core.plugin_data import plugin_data_dir
 from mcp_core.redact import redact_error_text
 
 __all__ = ["DEFAULT_COOLDOWN_S", "SourceStoppedError", "StopGate", "default_gate", "is_refusal"]
@@ -123,6 +123,5 @@ _default: StopGate | None = None
 def default_gate() -> StopGate:
     global _default
     if _default is None:
-        data = os.environ.get("CLAUDE_PLUGIN_DATA")
-        _default = StopGate(Path(data) if data else None)
+        _default = StopGate(plugin_data_dir())
     return _default

@@ -1,189 +1,98 @@
-# Authenticated transport: driving your own Chrome
+# Браузерный профиль плагина
 
-Some marketplaces refuse datacenter traffic outright. Ozon answers
-`composer-api.bx` with an endless 307 redirect loop; no amount of TLS impersonation
-clears it. The reliable answer is not a better fingerprint — it is to run the fetch
-**inside a browser you already trust**, over the Chrome DevTools Protocol.
+Часть магазинов не отвечает на HTTP-запросы с любым отпечатком TLS, зато пускает
+настоящий Chrome. Для них плагин держит отдельный анонимный профиль Chrome и управляет
+им по CDP (Chrome DevTools Protocol) с этого же мака.
 
-Nine sources use this: Ozon, Avito, Taobao, Megamarket, Lamoda, DNS, Citilink,
-AliExpress and Cian.
-The split matters. Taobao, Megamarket, DNS, Citilink, AliExpress and Cian are
-**CDP-only** — no
-anonymous tier exists, so nothing reads from them without a logged-in Chrome. Ozon
-and Avito use CDP as a **tier-2 fallback**: tier 1 (TLS impersonation) usually works
-from a Russian residential IP, and CDP only kicks in when the anonymous tier is
-challenged. Lamoda is split — its card path is anonymous GraphQL, but search needs
-CDP. Wildberries, Yandex Market and Detsky Mir never touch it.
+Через профиль сейчас ходят Ozon (только так), поиск Лэмоды, DNS, Ситилинк, AliExpress
+и запасной путь Авито. WB, Маркет и Детмир браузер не трогают. Что из этого работает
+вживую, записано в [LIVE_STATUS.md](LIVE_STATUS.md).
 
-## Read this before you enable it
+## Запуск
 
-CDP hands **any local process full control of the Chrome profile it is attached
-to**, including every session logged into that profile. If you attach it to your
-daily browser, a bug or a hostile local process inherits your banking, email and
-work sessions.
-
-So the setup below uses a **dedicated scraping profile**. That is not a nicety; it
-is the entire mitigation. The other three layers:
-
-| Mitigation | What it prevents |
-|---|---|
-| Separate `--user-data-dir` | Blast radius beyond the marketplaces you log into |
-| `--remote-debugging-address=127.0.0.1` | Any LAN access to the debugging port |
-| Scheme guard in `open_page` | An authenticated browser being aimed at `file:///` |
-| Per-connector host allowlists | A crafted SKU becoming a request for `/api/personal/orders` |
-
-**No credentials are ever stored, read or transmitted by this project.** You log in
-by hand, in a browser you control. There is no credential store to leak. (The
-optional MPStats connector is the one exception — you supply `MPSTATS_MP_AUTH`
-yourself via env; it is never stored by the project either.)
-
-## Setup
-
-### Optional challenge handoff
-
-Set `CHROME_CHALLENGE_HANDOFF_S=120` in the MCP server's environment to retain
-DOM-detected Lamoda search and Taobao search/card challenge tabs for up to two
-minutes. Default `0` disables retention; the hard maximum is 300 seconds, including
-initial browser attachment/navigation. A headed Chrome and an active MCP session
-are required. This mode does not solve CAPTCHA or log into accounts.
-
-An error with `handoff_expires_at` confirms a retained tab. Complete the interaction
-in that tab, then repeat the same operation and arguments in the same MCP session.
-The connector reads that exact page without navigating again; a successful read
-closes it. For comparison, repeat the original query with only the affected source.
-Pending handoffs take precedence over successful-result caches, so another
-session's cached response cannot bypass the retained page.
-The original expiry never extends on retries. Different sessions and operations
-receive independent tabs; at most four handoffs are active per process. Concurrent
-reads of one lease or a full registry report a busy transport error.
-
-The runtime attempts to reveal the owned browser window and prevents unrelated
-connector calls from hiding it while the handoff is active. Foreground activation
-is best-effort, especially for remote browsers. Expiry, errors, cancellation and
-graceful shutdown close owned tabs; a hard process kill cannot guarantee expiry
-in an external Chrome. Without `handoff_expires_at`, use the ordinary retry flow:
-HTTP errors rejected before DOM extraction, headless runs and calls without an
-MCP session do not retain a tab. No cookies, screenshots or browser profile copies
-are written by the handoff runtime. A retained error also carries an opaque
-`handoff_id`; a vision-capable MCP client may pass it to
-`compare_browser_snapshot(handoff_id)` to receive the current viewport as an
-image plus metadata. The snapshot does not solve or interpret the challenge.
-
-### 1. Start Chrome with remote debugging
-
-**Windows (PowerShell):**
-
-```powershell
-.\scripts\start_chrome_cdp.ps1
-```
-
-**Linux / macOS:**
+Сервер плагина поднимает профиль сам при первом обращении к браузерному магазину и
+ждёт порт до 12 секунд. Запустить заранее или закрыть можно руками:
 
 ```bash
-./scripts/start_chrome_cdp.sh
+uv run marketplace-mcp browser
 ```
 
-Both create a scraping-only profile and bind the debugging port to localhost:
+```bash
+uv run marketplace-mcp browser stop
+```
 
-| Platform | Default profile location |
-|---|---|
-| Windows | `%LOCALAPPDATA%\Chrome-Scraping` |
-| macOS | `~/Library/Application Support/Chrome-Scraping` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/chrome-scraping` |
+`scripts/start_chrome_cdp.sh` делает то же самое из любого каталога. Сервер Chrome
+не закрывает: окно живёт, пока его не закроет `browser stop` или ты сам.
 
-Useful flags: `--port 9333`, `--profile /path/to/dir`, `--headless`.
-
-Headless is off by default and should stay off: anti-bot systems detect headless
-Chrome readily, which defeats the purpose of using a real browser.
-
-### 2. Log into the marketplaces you need — and nothing else
-
-In the window that opens, sign into whichever CDP sources you use — `ozon.ru`,
-`avito.ru`, `taobao.com`, `megamarket.ru`, `lamoda.ru`, `dns-shop.ru`,
-`citilink.ru`, `aliexpress.ru`. One profile serves them all. **Do not** sign into banking, email, or
-work accounts here. Keeping it single-purpose is what bounds the risk.
-
-### 3. Verify
+Проверка, что CDP слушает только loopback:
 
 ```bash
 curl -s http://127.0.0.1:9222/json/version
 ```
 
-You should see Chrome's version JSON. On Windows you can also use
-`Test-NetConnection 127.0.0.1 -Port 9222`.
+## Где профиль и что в нём
 
-### 4. Confirm the connector sees it
+Профиль лежит в `${CLAUDE_PLUGIN_DATA}/chrome-profile`. Без этой переменной (CLI,
+разработка) берётся самый свежий каталог `~/.claude/plugins/data/ru-shop-search-*`,
+а если установок нет, то `~/.claude/plugins/data/ru-shop-search-inline`. У установки
+через `--plugin-dir` и у установки из marketplace каталоги разные, поэтому и профили
+разные.
+
+Входа в профиле нет ни на один сайт и не будет. Там только куки, которые магазины
+выдают анонимному браузеру, например антибот-куки Ozon. В git они не попадают.
+
+## Ограничения
+
+| Что | Зачем |
+|---|---|
+| Отдельный `--user-data-dir` | Основной профиль Chrome с твоими сессиями недоступен по CDP |
+| CDP на `127.0.0.1`, адрес не настраивается | Порт не виден из сети |
+| `open_page` открывает только `http(s)` | Вкладку нельзя направить на `file:///` |
+| `open_page` открывает только хосты из `SHOP_DOMAINS` | Вкладку нельзя увести на чужой сайт |
+| Коннектор собирает адрес `fetch` из проверенных частей | Строка от модели не становится запросом к `/api/personal/...` |
+
+## Антибот-страница и отказ
+
+Главный документ со статусом 401, 403, 407, 429 или 5xx даёт `NavBlocked`: страницу
+блокировки парсер не получит. Исключение одно. Коннектор может передать
+`challenge_grace_s`, тогда 403, который вкладка сама перезагружает в 200 за это время,
+отказом не считается. Сами мы в это время ничего не отправляем. Так работает Ozon:
+на свежем профиле первый заход получает `403 Antibot Challenge Page`, через 1–2 с
+вкладка уходит на 200.
+
+Если за отведённое время 200 не пришёл, или `fetch` из вкладки вернул 401/403/429,
+магазин останавливается на 30 минут (см. [ARCHITECTURE.md](ARCHITECTURE.md), раздел
+про `stopgate`). Капчу плагин не решает. Если в окне профиля видна капча, её можно
+пройти самому, затем снять стоп:
 
 ```bash
-uv run python -c "
-import asyncio
-from ozon_connector.server import ozon_selfcheck
-print(asyncio.run(ozon_selfcheck()).status)
-"
+uv run marketplace-mcp resume ozon
 ```
 
-`success` means both tiers work. `inconclusive` with a transport message means
-Chrome is not reachable — recheck the port. `drift_detected` means Ozon changed its
-payload shape and the connector needs updating.
+## Окно не мешает
 
-## Configuration
+`CHROME_STEALTH=1` (по умолчанию) открывает вкладки в фоне и прячет приложение, как
+⌘H, после каждой вкладки. К отпечатку браузера это отношения не имеет: окно
+настоящее, не headless. Проверено 2026-09-27: Ozon проходит антибот со скрытым окном,
+Claude остаётся на переднем плане. Спрятанное окно вызывается из Dock. Если macOS
+не дала `osascript` управлять System Events, окно просто останется видимым.
 
-| Variable | Default | Purpose |
+## Настройки
+
+| Переменная | По умолчанию | Что делает |
 |---|---|---|
-| `CHROME_CDP_PORT` | `9222` | Debugging port |
-| `CHROME_SCRAPING_PROFILE` | platform default above | Profile directory |
-| `CHROME_BINARY` | auto-detected | Explicit path to Chrome/Chromium/Edge |
-| `CHROME_STEALTH` | `1` | Windows: park the window off-screen; macOS: open tabs in the background and keep the app hidden (⌘H) so it never steals focus or switches your Space |
-| `CHROME_HEADLESS` | `0` | Headless mode — detectable, use only on a display-less host |
+| `CHROME_CDP_PORT` | `9222` | Порт CDP |
+| `CHROME_SCRAPING_PROFILE` | `${CLAUDE_PLUGIN_DATA}/chrome-profile` | Другой каталог профиля |
+| `CHROME_BINARY` | ищется в `/Applications` | Путь к Chrome |
+| `CHROME_STEALTH` | `1` | `0` оставляет окно на виду |
+| `CHROME_HEADLESS` | `0` | Headless; антиботы его замечают, не включай |
 
-Auto-detection covers Chrome, Chromium and Edge in the standard locations for all
-three platforms. On Linux it also consults `PATH`.
+## Если не работает
 
-## How it behaves at runtime
-
-The connector starts Chrome automatically on first use if the port is not already
-listening, so the launcher scripts are optional convenience. It waits up to 12
-seconds for the port to bind.
-
-Chrome is **detached, never closed** by the connector — it is your browser. Each
-fetch opens a tab, navigates, reads, and closes that tab.
-
-Every operation is individually bounded (tab creation, navigation, teardown), so a
-wedged CDP session cannot hang a tool call indefinitely. A block, auth wall or 5xx
-main document raises `NavBlocked` rather than handing a login page to a parser as
-though it were data — Playwright resolves `goto()` for those statuses, so this check
-is what stands between you and silently parsing a captcha page.
-
-## Troubleshooting
-
-**"Chrome/Chromium not found"** — set `CHROME_BINARY` to the full executable path.
-
-**"CDP did not bind within 12s"** — another Chrome instance is likely holding the
-same profile directory. Close it, or use a different `--profile`.
-
-**Port already in use** — something else has 9222. Use `--port 9333` and set
-`CHROME_CDP_PORT` to match.
-
-**Ozon still blocked with CDP running** — confirm you are logged into ozon.ru *in
-the scraping profile* (not your main browser), and that the session has not
-expired. Open the page manually in that window to check.
-
-**Running in a container as root** — Chrome's sandbox refuses to run as root; the
-launcher adds `--no-sandbox` automatically when it detects that case.
-
-## Should you use this at all?
-
-If you only need Wildberries, Yandex Market and Detsky Mir: **no**. All three work
-over plain anonymous HTTP, and `compare_prices` will report every CDP source it
-can't reach as blocked and rank the rest.
-
-You need it the moment Taobao, Megamarket, DNS, Citilink or AliExpress matter —
-those six have no anonymous tier, so without a logged-in Chrome they return nothing at all. For
-Ozon and Avito it is optional insurance: tier 1 usually answers, and CDP only earns
-its keep when the anonymous tier is challenged. For Lamoda, card lookups work
-without it but search does not.
-
-A residential IP is the alternative for the fallback sources — from a Russian
-residential address Ozon's and Avito's tier 1 often work without any browser. It
-does nothing for the CDP-only six, whose block is at the API, not the IP. Set
-`OZON_PROXY`/`AVITO_PROXY` or the standard `HTTPS_PROXY` to route through one.
+- **«Chrome/Chromium not found»**: укажи `CHROME_BINARY`.
+- **«CDP did not bind within 12s»**: профиль уже открыт другим Chrome без CDP.
+  Закрой его.
+- **Порт 9222 занят чужим Chrome**: плагин подключится к нему. Закрой его или задай
+  другой `CHROME_CDP_PORT`.
+- **Playwright не подключается к Chrome 151 и новее**: это ожидаемо, транспорт сам
+  переходит на сырой CDP.

@@ -79,14 +79,13 @@ profile. This is the answer for sources that reject non-browser fingerprints
 outright, and it is why those sources need no stored credentials. Setup:
 [CDP_SETUP.md](CDP_SETUP.md).
 
-The CDP dial target is configurable: `CHROME_CDP_HOST` (default `127.0.0.1`) and
-`CHROME_CDP_PORT` (default `9222`). Autostart only fires on loopback — a remote
-host means the operator runs that Chrome themselves (a sidecar, the host's
-browser), and spawning a local one would connect to the wrong profile.
-`probe_session()` health-checks the session for operator-facing
-diagnostics without raising.
-
-Playwright is imported lazily, so a tier-1-only connector never pays for it.
+CDP всегда на `127.0.0.1`, меняется только порт (`CHROME_CDP_PORT`, по умолчанию
+`9222`). Профиль лежит в `${CLAUDE_PLUGIN_DATA}/chrome-profile` (`mcp_core.plugin_data`),
+сервер поднимает его сам при первой навигации. `open_page` открывает только хосты из
+`SHOP_DOMAINS`, а `challenge_grace_s` пропускает 403-страницу антибота, которую
+вкладка сама перезагружает в 200 (Ozon). `start_browser()`/`close_browser()` стоят
+за командой `marketplace-mcp browser`, `probe_session()` проверяет сессию для
+`doctor`, не поднимая исключений.
 
 ### `stopgate` — one refusal stops a shop
 

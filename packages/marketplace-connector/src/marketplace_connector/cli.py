@@ -11,6 +11,9 @@
 
 ``marketplace-mcp resume <shop>``
     Lift a stop by hand, e.g. after passing the captcha yourself in the browser window.
+
+``marketplace-mcp browser [start|stop]``
+    Start or close the plugin's anonymous Chrome profile (CDP on 127.0.0.1 only).
 """
 
 from __future__ import annotations
@@ -64,6 +67,23 @@ def cmd_resume(argv: list[str]) -> int:
         stopgate.StopGate(data).clear(shop)
     print(f"{shop}: stop lifted")
     return 0
+
+
+def cmd_browser(argv: list[str]) -> int:
+    from mcp_core.transport import chrome_cdp
+
+    action = argv[0] if argv else "start"
+    if action == "start" and len(argv) <= 1:
+        ok, detail = asyncio.run(chrome_cdp.start_browser())
+        print(f"Chrome CDP on {chrome_cdp.CDP_URL}: {detail}" if ok else f"Chrome did not start: {detail}")
+        print(f"profile: {chrome_cdp.SCRAPING_PROFILE}")
+        return 0 if ok else 1
+    if action == "stop" and len(argv) == 1:
+        closed = asyncio.run(chrome_cdp.close_browser())
+        print("Chrome closed" if closed else f"nothing listening on {chrome_cdp.CDP_URL}")
+        return 0
+    print("usage: marketplace-mcp browser [start|stop]", file=sys.stderr)
+    return 2
 
 
 def _check_detail(check: object) -> str:
@@ -156,9 +176,6 @@ def cmd_doctor(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    dirs = _plugin_data_dirs()
-    if dirs and not os.environ.get("CLAUDE_PLUGIN_DATA"):
-        stopgate._default = stopgate.StopGate(dirs[-1])
     results = []
     for name, module_path, tool_name in _SELFCHECKS:
         if only and name not in only:
@@ -185,8 +202,8 @@ def cmd_doctor(argv: list[str]) -> int:
     print("  'inconclusive' usually means the source is blocked from this network —")
     print("  run it from a machine with your Chrome (CDP) or a Russian residential IP.")
 
-    # CDP-backed sources depend on the operator's Chrome being up and logged
-    # in; probe that session directly so a dead browser is reported as itself,
+    # CDP-backed sources depend on the plugin's Chrome profile being up;
+    # probe that session directly so a dead browser is reported as itself,
     # not mistaken for five separate marketplace outages.
     cdp_note = ""
     try:
@@ -248,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         print(__doc__ or "marketplace-mcp CLI")
         return 0
     command, rest = args[0], args[1:]
-    commands = {"doctor": cmd_doctor, "stops": cmd_stops, "resume": cmd_resume}
+    commands = {"doctor": cmd_doctor, "stops": cmd_stops, "resume": cmd_resume, "browser": cmd_browser}
     if command in commands:
         return commands[command](rest)
     print(f"unknown command {command!r}; expected one of {', '.join(commands)}", file=sys.stderr)

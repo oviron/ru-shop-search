@@ -1,13 +1,10 @@
 """Ozon MCP connector.
 
-Two-tier strategy (Nov 2026 verified on the operator's residential IP):
-  Tier 1: curl_cffi impersonate=chrome124 — usually 403 because Cloudflare __cf_bm
-    JS challenge. Tried first since 0 setup cost.
-  Tier 2: Chrome CDP — connect to the operator's logged-in browser at 127.0.0.1:9222,
-    fetch composer-api.bx from inside live session. Required Chrome started
-    via scripts/start_chrome_cdp.ps1 (Windows) or scripts/start_chrome_cdp.sh (Linux/macOS).
+Only the browser works: plain HTTP gets a 307 ``__rr`` loop and a 403 antibot page.
+An ozon.ru tab in the plugin's anonymous Chrome profile (CDP on 127.0.0.1) clears
+the antibot by itself, then ``fetch`` reads composer-api.bx from inside it.
 
-SECURITY: Tier-2 fetch() runs INSIDE the operator's authenticated ozon.ru session.
+SECURITY: fetch() runs INSIDE the profile's ozon.ru session.
 sku_or_path inputs are normalized + allowlisted to prevent SSRF that would
 exfiltrate /api/v3/personal/orders or navigate to /i/logout.
 
@@ -20,19 +17,13 @@ import asyncio
 import datetime
 import json
 import os
-import pickle
 import posixpath
 import re
-import subprocess
-import sys
-import tempfile
 import urllib.parse
 from collections.abc import Callable
-from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 import httpx
-from curl_cffi import requests as cffi
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.error_handling import RetryMiddleware
@@ -49,13 +40,7 @@ from mcp_core.errors import (
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
-from mcp_core.process import (
-    safe_child_env,
-    terminate_process_tree,
-    worker_process_kwargs,
-)
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport import proxy_from_env
 from mcp_core.transport.chrome_cdp import NavBlocked, cdp_setup_hint, open_page
 from pydantic import Field
 
@@ -108,19 +93,7 @@ _REVIEW_SORT_ALIASES = {
 }
 PRODUCT_SLUG_RE = re.compile(r"^/product/(?:[^/]*-)?(\d+)/?$")
 
-OZON_HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5",
-    "Referer": "https://www.ozon.ru/",
-    "x-o3-app-name": "dweb_client",
-    "x-o3-app-version": "release_2-7-1",
-    "x-o3-page-type": "detail",
-}
 _settings = get_settings()
-# auto-latest WITHIN the installed curl-cffi version; uv.lock pins that version.
-# Run `uv lock --upgrade-package curl-cffi --project ozon` quarterly to refresh
-# the JA3/JA4 fingerprint pool. Override via OZON_IMPERSONATE.
-IMPERSONATE = _settings.impersonate
 TIMEOUT = _settings.timeout
 MAX_BODY_BYTES = _settings.max_body_bytes  # 50 MB hard cap default; OZON_MAX_BODY_BYTES
 _SELFCHECK_SKU = _settings.selfcheck_sku  # golden-fixture baseline SKU; OZON_SELFCHECK_SKU
@@ -129,129 +102,14 @@ _SELFCHECK_SKU = _settings.selfcheck_sku  # golden-fixture baseline SKU; OZON_SE
 _min_gap = _settings.min_gap
 _pacer = Pacer(_min_gap, source="ozon")
 _cdp_lock = asyncio.Lock()  # serialize CDP tab creation
+_REFUSAL_STATUSES = frozenset({401, 403, 429})
+# The first visit on a fresh profile gets a 403 challenge page the tab clears by itself in ~1-2 s.
+_CHALLENGE_GRACE_S = 12.0
 
 # Caches the (status, body) of successful composer reads, keyed by canonical path.
 # Small by design: Ozon bodies are large, and an agent revisits a handful of
 # products, not hundreds. OZON_CACHE_TTL=0 disables.
 _cache: TTLCache[tuple[int, str]] = TTLCache(ttl_s=_settings.cache_ttl, max_entries=64)
-
-
-def _proxy() -> str | None:
-    """Resolve Ozon's tier-1 proxy: explicit ``OZON_PROXY`` first, then the standard vars.
-
-    Tier 2 is intentionally unaffected. That tier runs inside a Chrome instance
-    the operator started themselves, so its egress is that browser's business —
-    routing it from here would silently contradict the user's own browser config.
-    """
-    return (_settings.proxy.get_secret_value() or "").strip() or proxy_from_env("OZON_PROXY")
-
-
-class _SyncCallTimeout(TimeoutError):
-    pass
-
-
-class _SyncCallError(RuntimeError):
-    pass
-
-
-_SYNC_WORKER_CODE = r"""
-import importlib
-import pickle
-import re
-import sys
-from urllib.parse import urlsplit, urlunsplit
-
-def _resolve(module_name, qualname):
-    obj = importlib.import_module(module_name)
-    for part in qualname.split("."):
-        obj = getattr(obj, part)
-    return obj
-
-def _redact_url(url):
-    try:
-        parts = urlsplit(url)
-        if not parts.scheme or not parts.netloc:
-            return "<redacted-url>"
-        path = parts.path or "/"
-        host = parts.hostname or ""
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        netloc = f"{host}:{parts.port}" if parts.port is not None else host
-        return urlunsplit((parts.scheme, netloc, path, "<redacted-query>" if parts.query else "", ""))
-    except Exception:
-        return "<redacted-url>"
-
-def _redact(text):
-    return re.sub(r"https?://[^\s'\"<>]+", lambda m: _redact_url(m.group(0)), str(text or ""))
-
-try:
-    out_path = sys.argv[1]
-    module_name, qualname, args = pickle.loads(sys.stdin.buffer.read())
-    result = _resolve(module_name, qualname)(*args)
-    payload = ("ok", result)
-except BaseException as exc:
-    payload = ("error", (exc.__class__.__name__, _redact(exc)))
-with open(out_path, "wb") as fh:
-    fh.write(pickle.dumps(payload))
-"""
-
-
-def _sync_call_in_process(func: Any, args: tuple[Any, ...], timeout_s: float) -> Any:
-    if not _can_process_call(func):
-        raise _SyncCallError(
-            f"{getattr(func, '__module__', '')}.{getattr(func, '__qualname__', '')} is not subprocess-callable"
-        )
-    timeout = max(0.01, float(timeout_s))
-    payload = pickle.dumps((func.__module__, func.__qualname__, args))
-    fd, out_path = tempfile.mkstemp(prefix="ozon-sync-worker-", suffix=".pkl")
-    os.close(fd)
-    proc = subprocess.Popen(
-        [sys.executable, "-c", _SYNC_WORKER_CODE, out_path],
-        cwd=str(Path(__file__).resolve().parent),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=safe_child_env(),
-        **worker_process_kwargs(),
-    )
-    try:
-        assert proc.stdin is not None
-        proc.stdin.write(payload)
-        proc.stdin.close()
-        proc.wait(timeout=timeout)
-        if proc.returncode != 0:
-            raise _SyncCallError(f"child exited {proc.returncode}")
-        try:
-            out = Path(out_path).read_bytes()
-            kind, payload = pickle.loads(out)
-        except Exception as exc:
-            raise _SyncCallError("child returned malformed payload") from exc
-    except subprocess.TimeoutExpired as exc:
-        terminate_process_tree(proc)
-        raise _SyncCallTimeout(f"sync child exceeded {timeout_s}s") from exc
-    finally:
-        try:
-            os.remove(out_path)
-        except Exception:
-            pass
-    if kind == "ok":
-        return payload
-    name, message = payload
-    raise _SyncCallError(f"{name}: {message}")
-
-
-def _can_process_call(func: Any) -> bool:
-    return (
-        bool(getattr(func, "__module__", ""))
-        and bool(getattr(func, "__qualname__", ""))
-        and "<locals>" not in getattr(func, "__qualname__", "")
-    )
-
-
-async def _run_sync_bounded(func: Any, *args: Any, timeout_s: float) -> Any:
-    if _can_process_call(func):
-        return await asyncio.to_thread(_sync_call_in_process, func, args, timeout_s)
-    raise _SyncCallError(f"{getattr(func, '__qualname__', repr(func))} is not subprocess-callable")
 
 
 async def _polite_wait() -> None:
@@ -261,60 +119,6 @@ async def _polite_wait() -> None:
     pace without rebuilding the pacer.
     """
     await _pacer.wait(min_gap=_min_gap)
-
-
-def _sync_curl_get(url: str, proxy: str | None = None) -> tuple[int, str]:
-    """Tier-1: curl_cffi sync GET with INCREMENTAL body cap.
-
-    Streams the response and aborts mid-download once MAX_BODY_BYTES is
-    exceeded. Defense-in-depth match for httpx-based connectors which all
-    stream rather than buffer-then-check.
-
-    Maintenance note: IMPERSONATE='chrome' is auto-latest WITHIN the
-    installed curl-cffi version; uv.lock pins that version. Run
-    `uv lock --upgrade-package curl-cffi --project ozon` quarterly to
-    keep the JA3/JA4 fingerprint pool current with Chrome stable.
-    """
-    chunks: list[bytes] = []
-    total = 0
-    encoding = "utf-8"
-    # The proxy arrives as an explicit argument rather than an environment
-    # variable because this function runs in a subprocess whose environment is
-    # deliberately reduced to an allowlist (mcp_core.process.safe_child_env), and
-    # that allowlist excludes proxy vars on purpose. Passing it as an argument
-    # keeps the child's environment minimal while still honouring OZON_PROXY.
-    kwargs: dict[str, Any] = {}
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
-    r = cffi.get(
-        url,
-        headers=OZON_HEADERS,
-        # curl_cffi types this as a Literal of known profiles, but the value is
-        # operator-configurable via OZON_IMPERSONATE, so the check is deferred to
-        # curl_cffi itself (which raises clearly on an unknown profile).
-        impersonate=cast(Any, IMPERSONATE),
-        timeout=TIMEOUT,
-        stream=True,
-        **kwargs,
-    )
-    try:
-        encoding = r.encoding or "utf-8"
-        for chunk in r.iter_content(chunk_size=64 * 1024):
-            total += len(chunk)
-            if total > MAX_BODY_BYTES:
-                raise ValueError(f"body exceeds {MAX_BODY_BYTES} bytes (aborted at {total} during stream)")
-            chunks.append(chunk)
-        body = b"".join(chunks)
-        try:
-            text = body.decode(encoding, errors="replace")
-        except (LookupError, TypeError):
-            text = body.decode("utf-8", errors="replace")
-        return r.status_code, text
-    finally:
-        try:
-            r.close()
-        except Exception:
-            pass
 
 
 def _canonical_composer_path(api_path: str) -> str:
@@ -355,19 +159,22 @@ def _canonical_composer_path(api_path: str) -> str:
 
 
 async def _cdp_fetch_json(api_url: str, ctx: Context | None) -> tuple[int, str]:
-    """Tier-2: open ozon.ru in the operator's logged-in Chrome, fetch JSON from inside.
+    """Open ozon.ru in the plugin's Chrome profile, fetch JSON from inside the tab.
 
     Receives FULL api_url (composer-api.bx URL with ?url= query), not raw path.
     Serialized via _cdp_lock to prevent burst-call tab spam in the operator's Chrome.
 
-    The fetch JS enforces the same MAX_BODY_BYTES cap as Tier-1 to defend
+    The fetch JS enforces MAX_BODY_BYTES to defend
     against an upstream / MITM serving an inflated response that would
     OOM the connector through the CDP -> Python serialization pipeline.
     page.evaluate is wrapped in asyncio.wait_for to bound JS hangs.
     """
 
     async def _attempt() -> tuple[int, str]:
-        async with _cdp_lock, open_page("https://www.ozon.ru/", wait_ms=4000) as page:
+        async with (
+            _cdp_lock,
+            open_page("https://www.ozon.ru/", wait_ms=4000, challenge_grace_s=_CHALLENGE_GRACE_S) as page,
+        ):
             raw = await asyncio.wait_for(
                 page.evaluate(
                     """async (args) => {
@@ -493,16 +300,14 @@ def _parse_widgets(payload: dict) -> dict[str, Any]:
 
 
 async def _fetch_composer(api_path: str, ctx: Context | None) -> tuple[int, str, str]:
-    """Try Tier-1 (curl_cffi); fall back to Tier-2 (CDP) on 403/non-200.
+    """Read a composer page through ``fetch`` inside an ozon.ru tab.
 
-    Returns (status_code, body, tier_used).
+    Returns (status_code, body, tier_used). Plain HTTP is not tried: Ozon answers
+    it with a 307 ``__rr`` loop and a 403, and that request would itself be a
+    refusal. A 401/403/429 from the tab stops Ozon via the pacer.
 
     Successful reads are cached for ``OZON_CACHE_TTL``, keyed by the canonical
-    composer path. Caching matters more here than in any other connector: a miss
-    can cost a Cloudflare challenge plus a full browser round-trip through CDP,
-    so replaying a known-good body is the difference between a fast answer and a
-    multi-second one. Only 200s are stored — a cached 403 would keep reporting a
-    block after the challenge cleared.
+    composer path; a block is never cached.
     """
     try:
         safe_path = _canonical_composer_path(api_path)
@@ -518,44 +323,28 @@ async def _fetch_composer(api_path: str, ctx: Context | None) -> tuple[int, str,
     await _polite_wait()
 
     try:
-        status, body = await _run_sync_bounded(_sync_curl_get, api_url, _proxy(), timeout_s=max(0.01, float(TIMEOUT)))
-        if status == 200 and body and not body.lstrip().startswith("<"):
-            _cache.set(safe_path, (status, body))
-            return status, body, "curl_cffi"
-        if ctx and status == 403:
-            await ctx.debug("Ozon Tier-1 403 (Cloudflare __cf_bm); trying CDP")
-    except Exception as exc:
-        if ctx:
-            await ctx.debug(f"Ozon Tier-1 exception: {exc}; trying CDP")
-
-    try:
         status, body = await _cdp_fetch_json(api_url, ctx)
-        if status == 200 and body and not body.lstrip().startswith("<"):
-            _cache.set(safe_path, (status, body))
-        return status, body, "cdp"
+        tier = "cdp"
     except NavBlocked as exc:
-        if exc.status:
-            return exc.status, str(exc), "cdp_blocked"
-        return 0, str(exc), "cdp_failed"
+        status, body, tier = (exc.status, str(exc), "cdp_blocked") if exc.status else (0, str(exc), "cdp_failed")
     except Exception as exc:
         return 0, str(exc), "cdp_failed"
+    if status in _REFUSAL_STATUSES:
+        _pacer.record_refusal(f"http {status}")
+    elif status == 200 and body and not body.lstrip().startswith("<"):
+        _cache.set(safe_path, (status, body))
+    return status, body, tier
 
 
-def _ozon_blocked_error(tier: str, detail: str = "") -> TransportDownError:
-    """Build the actionable 403-blocked error for the current tier.
-
-    Cloudflare __cf_bm / Ozon WAF blocks are transport-layer access failures
-    (not validation, not parser drift), so they surface as TransportDownError
-    with status_code=403 and the operator's solve-the-challenge guidance inline.
-    """
+def _ozon_blocked_error(tier: str, detail: str = "", status: int = 403) -> TransportDownError:
+    """A refusal from the tab: transport-layer, carrying the status that stopped Ozon."""
     message = (
-        f"Ozon returned HTTP 403 via {tier}. "
-        "CDP may be reachable, but the browser session is blocked by Ozon/Cloudflare. "
-        "Open ozon.ru in the Chrome CDP profile, solve any captcha/challenge, then retry."
+        f"Ozon refused the browser tab (HTTP {status}) via {tier}; Ozon is stopped, do not retry. "
+        "A captcha in the profile window may be passed by hand, then `marketplace-mcp resume ozon`."
     )
     if detail:
         message += f" Detail: {detail[:160]}"
-    return TransportDownError(message, status_code=403)
+    return TransportDownError(message, status_code=status)
 
 
 def _canonical_product_path_from_input(raw_input: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -633,9 +422,8 @@ async def ozon_card(
 ) -> OzonCardResponse:
     """Fetch Ozon product card data via composer-api.bx.
 
-    Tier-1 (curl_cffi) tried first. Falls back to Tier-2 (Chrome CDP at port
-    9222) when Tier-1 hits Cloudflare 403. Tier-2 requires the operator running Chrome
-    via scripts/start_chrome_cdp.ps1 (Windows) or scripts/start_chrome_cdp.sh (Linux/macOS) first.
+    Read through ``fetch`` inside an ozon.ru tab of the plugin's Chrome profile;
+    the profile is started on demand.
 
     ## Return Format
 
@@ -672,13 +460,13 @@ async def ozon_card(
         if status_code == 0:
             raise_tool_error(
                 TransportDownError(
-                    "Tier-1 (curl_cffi) blocked AND Tier-2 (CDP) unreachable. "
+                    "Ozon browser tab unavailable. "
                     f"Start Chrome ({cdp_setup_hint()}) and ensure the CDP port is open. "
                     f"Last error: {body[:200]}"
                 )
             )
-        if status_code == 403:
-            raise_tool_error(_ozon_blocked_error(tier, body))
+        if status_code in _REFUSAL_STATUSES:
+            raise_tool_error(_ozon_blocked_error(tier, body, status_code))
         if status_code != 200:
             raise_tool_error(
                 TransportDownError(
@@ -828,8 +616,7 @@ async def ozon_reviews(
 ) -> OzonReviewsResponse:
     """Fetch Ozon product review texts + star distribution via composer-api.bx.
 
-    Tier-1 (curl_cffi) tried first, Tier-2 (Chrome CDP) fallback — same path
-    as ozon_card. Returns review texts (comment/positive/negative), per-review
+    Same browser-tab path as ozon_card. Returns review texts (comment/positive/negative), per-review
     score, helpfulness votes, author first name, date, plus the overall star
     distribution and total count.
 
@@ -952,7 +739,7 @@ async def _ozon_reviews_impl(
             if not collected:
                 raise_tool_error(
                     TransportDownError(
-                        f"Tier-1 (curl_cffi) blocked AND Tier-2 (CDP) unreachable. "
+                        "Ozon browser tab unavailable. "
                         f"Start Chrome ({cdp_setup_hint()}) and ensure the CDP port is open. "
                         f"Last error: {body[:300]}"
                     )
@@ -961,12 +748,12 @@ async def _ozon_reviews_impl(
             stop_reason = "all_tiers_failed"
             last_error = {"type": "all_tiers_failed", "message": body[:300]}
             break
-        if status_code == 403:
+        if status_code in _REFUSAL_STATUSES:
             if not collected:
-                raise_tool_error(_ozon_blocked_error(tier, body))
+                raise_tool_error(_ozon_blocked_error(tier, body, status_code))
             partial = True
             stop_reason = "blocked"
-            last_error = {"type": "blocked", "code": 403, "tier": tier, "message": body[:200]}
+            last_error = {"type": "blocked", "code": status_code, "tier": tier, "message": body[:200]}
             break
         if status_code != 200:
             if not collected:
@@ -1306,7 +1093,7 @@ async def ozon_search(
     ] = 1,
     ctx: Context | None = None,
 ) -> OzonSearchResponse:
-    """Search Ozon catalog. Tier-1 curl_cffi → Tier-2 CDP fallback.
+    """Search Ozon catalog through ``fetch`` inside an ozon.ru tab.
 
     Returns sku/title/price/rating per item. Schema parses Nov 2026
     `tileGridDesktop-*` widgets with `mainState` atom structure.
@@ -1401,13 +1188,13 @@ async def _ozon_search_impl(
     if status_code == 0:
         raise_tool_error(
             TransportDownError(
-                f"Tier-1 (curl_cffi) blocked AND Tier-2 (CDP) unreachable. "
+                "Ozon browser tab unavailable. "
                 f"Start Chrome ({cdp_setup_hint()}) and ensure the CDP port is open. "
                 f"Last error: {body[:300]}"
             )
         )
-    if status_code == 403:
-        raise_tool_error(_ozon_blocked_error(tier, body))
+    if status_code in _REFUSAL_STATUSES:
+        raise_tool_error(_ozon_blocked_error(tier, body, status_code))
     if status_code != 200:
         raise_tool_error(
             TransportDownError(
@@ -1453,7 +1240,7 @@ async def ozon_selfcheck(ctx: Context | None = None) -> OzonSelfcheckResponse:
     parser.
 
     Tri-state (audit 2026-06-01): a Cloudflare 403 / CDP-down / non-200 / non-JSON
-    body is `inconclusive` (transport — Ozon's tier-1 curl_cffi is often blocked),
+    body is `inconclusive` (transport or refusal),
     NEVER drift. Only a reached-200 JSON body missing a critical widget or failing
     the parse smoke is `drift`. The reviews_sort subcheck exercises the
     sort-param path (score_asc) that ozon_reviews pagination depends on.
@@ -1493,7 +1280,7 @@ async def _ozon_selfcheck_impl(ctx: Context | None) -> OzonSelfcheckResponse:
 
     async def _check(name: str, path: str, expected_prefixes: set[str], smoke: Callable[[dict], dict], baseline: str):
         # Whole subcheck under a hard wall-clock bound + catch-all: _fetch_composer
-        # (curl_cffi thread + CDP fallback) has no total-time deadline and could
+        # (browser tab + fetch) has no total-time deadline and could
         # wedge, and a transport/decode exception must map to inconclusive, never
         # crash or hang the canary (audit 2026-06-01 CRASH_HANG).
         try:
@@ -1513,8 +1300,7 @@ async def _ozon_selfcheck_impl(ctx: Context | None) -> OzonSelfcheckResponse:
             )
             return
         if status != 200:
-            # Ozon tier-1 curl_cffi is frequently Cloudflare-blocked and tier-2 CDP
-            # may be down — transport, not selector drift.
+            # A refusal or a dead browser is transport, not selector drift.
             reason = "rate_limited" if status == 429 else ("blocked" if status in (403, 401, 407) else "transport_down")
             checks[name] = R.selfcheck_entry(
                 "inconclusive", baseline=baseline, reason=reason, notes=[f"http {status} via {tier}"], code=status
