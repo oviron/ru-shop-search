@@ -93,7 +93,9 @@ class SourceOutcome(BaseModel):
     retry_after_s: int | None = Field(
         default=None, description="Seconds until a stopped source accepts requests again, when known."
     )
-    challenge_type: str | None = Field(default=None, description="captcha, login, or login_or_captcha when known.")
+    challenge_type: str | None = Field(
+        default=None, description="captcha, login, login_or_captcha, redirect or antibot_page when known."
+    )
 
 
 class CompareResponse(BaseModel):

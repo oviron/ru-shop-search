@@ -133,7 +133,7 @@ async def _request(url: str, label: str) -> Reply:
             headers=HEADERS,
             timeout_s=_settings.timeout,
             max_bytes=_settings.max_body_bytes,
-            retries=min(_settings.net_retries, 1),
+            retries=_settings.net_retries,
             backoff_s=_settings.net_backoff_s,
             proxy=_proxy(),
         )
@@ -164,10 +164,12 @@ async def _fetch_json(url: str, label: str, ctx: Context | None) -> Any:
                 )
             )
         try:
-            return json.loads(reply.text or "")
+            payload = json.loads(reply.text or "")
         except json.JSONDecodeError as exc:
             raise_tool_error(ParserDriftError(f"{label}: response was not valid JSON ({exc})", provider="detmir"))
             raise AssertionError("unreachable") from exc  # pragma: no cover
+        _limiter.record_success()
+        return payload
 
     was_cached = _cache.get(url) is not None
     payload = await _cache.get_or_fetch(url, fetch)

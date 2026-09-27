@@ -1,548 +1,321 @@
-"""Offline tests for the Lamoda connector.
-
-GraphQL and CDP rendering are monkeypatched out: the suite runs with no network
-and no Chrome. Fixtures mirror the shapes documented in ANTI_BOT.md — real
-GraphQL product JSON, and the search-tile extraction from a rendered page.
-"""
+"""Offline tests for the Lamoda connector: live pages from fixtures, the network stubbed at curl_cffi."""
 
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
+import re
+from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
 from lamoda_connector import server
+from mcp_core.pacing import Pacer
+from mcp_core.stopgate import StopGate
+from mcp_core.transport import impersonated
+from mcp_core.transport.impersonated import Reply
 
-GRAPHQL_PRODUCT = {
-    "sku": "MP002XM1RMM3",
-    "name": "Кроссовки Nike Air Max",
-    "brand_name": "Nike",
-    "price_amount": 12990.0,
-    "old_price": 16990.0,
-    "is_available": True,
-    "sizes": [
-        {"size": "40", "is_available": True},
-        {"size": "41", "is_available": False},
-    ],
-}
-
-SEARCH_EXTRACTED = {
-    "title": "кроссовки — Lamoda",
-    "items": [
-        {
-            "sku": "MP002XM1RMM3",
-            "title": "Кроссовки Nike Air Max",
-            "brand": None,
-            "price_rub": 12990.0,
-            "old_price_rub": 16990.0,
-            "url": "https://www.lamoda.ru/p/mp002xm1rmm3/",
-        },
-        {
-            "sku": "MP002XM1RMM4",
-            "title": "Кроссовки без цены",
-            "brand": None,
-            "price_rub": None,
-            "old_price_rub": None,
-            "url": "",
-        },
-    ],
-}
+FIXTURES = Path(__file__).parent / "fixtures"
+SEARCH_HTML = (FIXTURES / "search_live.html").read_text(encoding="utf-8")
+CARD_HTML = (FIXTURES / "card_live.html").read_text(encoding="utf-8")
+CARD_URL = "https://www.lamoda.ru/p/rtlaeu059301/shoes-adidasoriginals-kedy/"
 
 
 @pytest.fixture(autouse=True)
-def _no_cache(monkeypatch):
-    server._cache._data.clear()
-    # The pacer is real, and its default gap is seconds. An offline suite that
-    # actually sleeps it turns a 3-second run into a 90-second one and teaches
-    # everyone to distrust the timings.
-    monkeypatch.setattr(server, "_min_gap", 0.0)
-    server._pacer.reset()
+def fresh_state(monkeypatch):
+    server._cache.clear()
+    monkeypatch.setattr(server, "_pacer", Pacer(0.0, source="lamoda", gate=StopGate(None)))
+    yield
+    server._cache.clear()
 
 
-def _patch_graphql(monkeypatch, product):
-    async def fake_graphql(sku, ctx):
-        return product
+def stub_http(monkeypatch, *replies: Reply) -> list[str]:
+    urls: list[str] = []
+    queue = list(replies)
 
-    monkeypatch.setattr(server, "_graphql_card", fake_graphql)
+    async def fake_get(url, **kwargs):
+        urls.append(url)
+        return queue.pop(0)
 
-
-def _patch_render(monkeypatch, payload):
-    async def fake_render(query, ctx):
-        return payload
-
-    monkeypatch.setattr(server, "_cdp_render_search", fake_render)
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+    return urls
 
 
-# --------------------------------------------------------------- lamoda_card ----
+def ok(html: str) -> Reply:
+    return Reply(200, html, None)
 
 
-async def test_card_parses_graphql_product(monkeypatch):
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-
-    result = await server.lamoda_card("MP002XM1RMM3")
-
-    assert result.title == "Кроссовки Nike Air Max"
-    assert result.brand == "Nike"
-    assert result.price_rub == 12990.0
-    assert result.old_price_rub == 16990.0
-    assert result.is_available is True
-    assert len(result.sizes) == 2
-    assert result.sizes[1].is_available is False
-    assert result.tier_used == "graphql"
+def error_payload(err: ToolError) -> dict:
+    return json.loads(str(err))
 
 
-async def test_card_accepts_a_product_url(monkeypatch):
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-
-    result = await server.lamoda_card("https://www.lamoda.ru/p/mp002xm1rmm3/shoes-krossovki/")
-
-    assert result.sku == "MP002XM1RMM3"
-
-
-@pytest.mark.parametrize("bad", ["", "no-sku-here", "123456"])
-async def test_card_rejects_input_without_a_sku(bad):
-    with pytest.raises(ToolError):
-        await server.lamoda_card(bad)
+def edited_search(edit) -> str:
+    match = server._PAYLOAD_RE.search(SEARCH_HTML)
+    data, end = json.JSONDecoder().raw_decode(SEARCH_HTML, match.end())
+    edit(data)
+    return SEARCH_HTML[: match.end()] + json.dumps(data, ensure_ascii=False) + SEARCH_HTML[end:]
 
 
-async def test_card_maps_an_empty_product_list_to_not_found(monkeypatch):
-    async def fake_graphql(sku, ctx):
-        raise ToolError(server.NotFoundError(f"Lamoda SKU {sku} returned no product."))
-
-    monkeypatch.setattr(server, "_graphql_card", fake_graphql)
-
-    with pytest.raises(ToolError):
-        await server.lamoda_card("MP002XM1RMM3")
+# ------------------------------------------------------------------ search ----
 
 
-# ------------------------------------------------------------- lamoda_search ----
+async def test_search_reads_the_sites_own_page(monkeypatch):
+    urls = stub_http(monkeypatch, ok(SEARCH_HTML))
+
+    result = await server.lamoda_search("кроссовки  adidas")
+
+    assert urls == [
+        "https://www.lamoda.ru/catalogsearch/result/?q=%D0%BA%D1%80%D0%BE%D1%81%D1%81%D0%BE%D0%B2%D0%BA%D0%B8%20adidas"
+    ]
+    assert (result.tier_used, result.total_available, result.count) == ("http", 3878, 5)
+    assert [(i.sku, i.price_rub, i.old_price_rub) for i in result.items] == [
+        ("RTLAEU059301", 8063.0, 15999.0),
+        ("RTLAES035701", 6299.0, 8999.0),
+        ("RTLAES219202", 8999.0, None),
+        ("RTLADF666602", 7999.0, 16999.0),
+        ("RTLAEN425302", 7999.0, None),
+    ]
+    assert result.meta.warnings == []
 
 
-async def test_search_parses_tiles(monkeypatch):
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
+async def test_search_row_carries_title_brand_rating_stock_and_url(monkeypatch):
+    stub_http(monkeypatch, ok(SEARCH_HTML))
 
-    result = await server.lamoda_search("кроссовки")
+    first = (await server.lamoda_search("кроссовки adidas")).items[0]
 
-    assert result.count == 2
-    assert result.items[0].sku == "MP002XM1RMM3"
-    assert result.items[0].price_rub == 12990.0
-
-
-async def test_search_a_pricelss_item_is_none_never_zero(monkeypatch):
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
-
-    result = await server.lamoda_search("кроссовки")
-
-    assert result.items[1].price_rub is None
-    assert result.items[1].price_rub != 0
+    assert (first.title, first.brand) == ("Кеды HANDBALL SPEZIAL W", "adidas Originals")
+    assert (first.rating, first.review_count, first.in_stock) == (4.75, 95, True)
+    assert first.promo_until == "2026-09-27T23:59:59.000+03:00"
+    assert first.url == CARD_URL
 
 
-async def test_search_warns_when_no_tile_has_a_price(monkeypatch):
-    payload = {"title": "x", "items": [dict(SEARCH_EXTRACTED["items"][1])]}
-    _patch_render(monkeypatch, payload)
+async def test_a_row_without_reviews_has_no_rating(monkeypatch):
+    stub_http(monkeypatch, ok(SEARCH_HTML))
 
-    result = await server.lamoda_search("кроссовки")
+    last = (await server.lamoda_search("кроссовки adidas")).items[4]
 
-    assert "no_prices_on_page" in result.meta.warnings
-
-
-async def test_search_maps_zero_skus_to_parser_drift(monkeypatch):
-    _patch_render(monkeypatch, {"title": "кроссовки", "items": []})
-
-    with pytest.raises(ToolError):
-        await server.lamoda_search("кроссовки")
+    assert (last.rating, last.review_count) == (None, None)
 
 
-async def test_search_empty_visible_challenge_is_transport_down(monkeypatch):
-    _patch_render(
-        monkeypatch,
-        {
-            "title": "Lamoda",
-            "items": [],
-            "body_snippet": "Подтвердите, что вы не робот и пройдите проверку",
-        },
-    )
+async def test_a_promo_code_step_is_not_the_price(monkeypatch):
+    def needs_code(data):
+        data["products"][0]["prices"][2]["discount"]["promocode"] = "AUTUMN"
+
+    stub_http(monkeypatch, ok(edited_search(needs_code)))
+
+    result = await server.lamoda_search("кроссовки adidas")
+
+    assert (result.items[0].price_rub, result.items[0].promo_until) == (11199.0, None)
+    assert result.meta.warnings == [
+        "RTLAEU059301: price_step_skipped: onsite_promo discount needs a code or is unknown"
+    ]
+
+
+async def test_no_size_in_stock_means_out_of_stock(monkeypatch):
+    def sold_out(data):
+        for size in data["products"][0]["sizes"]:
+            size["is_available"] = False
+
+    stub_http(monkeypatch, ok(edited_search(sold_out)))
+
+    assert (await server.lamoda_search("кроссовки adidas")).items[0].in_stock is False
+
+
+async def test_unknown_sellability_is_unknown_stock(monkeypatch):
+    def unknown(data):
+        del data["products"][0]["is_sellable"]
+
+    stub_http(monkeypatch, ok(edited_search(unknown)))
+
+    assert (await server.lamoda_search("кроссовки adidas")).items[0].in_stock is None
+
+
+async def test_a_row_without_sku_is_skipped_and_reported(monkeypatch):
+    def no_sku(data):
+        data["products"][1]["sku_id"] = data["products"][1].pop("sku")
+
+    stub_http(monkeypatch, ok(edited_search(no_sku)))
+
+    result = await server.lamoda_search("кроссовки adidas")
+
+    assert [i.sku for i in result.items] == ["RTLAEU059301", "RTLAES219202", "RTLADF666602", "RTLAEN425302"]
+    assert result.meta.warnings == ["row_skipped: a search row came without a sku"]
+
+
+async def test_a_row_without_prices_is_reported(monkeypatch):
+    def no_prices(data):
+        data["products"][2]["prices"] = []
+
+    stub_http(monkeypatch, ok(edited_search(no_prices)))
+
+    result = await server.lamoda_search("кроссовки adidas")
+
+    assert result.items[2].price_rub is None
+    assert result.meta.warnings == ["RTLAES219202: no_price"]
+
+
+async def test_an_empty_page_is_an_honest_empty_result(monkeypatch):
+    def nothing(data):
+        data["products"] = []
+        data["pagination"]["found"] = 0
+
+    stub_http(monkeypatch, ok(edited_search(nothing)))
+
+    result = await server.lamoda_search("zxqvwj пплк")
+
+    assert (result.count, result.total_available) == (0, 0)
+    assert result.meta.warnings == ["empty: Lamoda found nothing for 'zxqvwj пплк'"]
+
+
+async def test_a_corrected_query_is_reported(monkeypatch):
+    def corrected(data):
+        data["products_meta"].update(is_predicted_term_corrected=True, predicted_term="кроссовки adidas")
+
+    stub_http(monkeypatch, ok(edited_search(corrected)))
+
+    result = await server.lamoda_search("кросовки адидас")
+
+    assert result.meta.warnings == ["query_corrected: Lamoda searched for 'кроссовки adidas' instead"]
+
+
+async def test_a_page_without_payload_is_drift(monkeypatch):
+    stub_http(monkeypatch, ok("<html><body>новый фронтенд</body></html>"))
 
     with pytest.raises(ToolError) as excinfo:
         await server.lamoda_search("кроссовки")
-    assert "challenge" in str(excinfo.value).lower()
+    assert error_payload(excinfo.value)["error"] == "parser_drift"
 
 
-async def test_a_challenge_stops_lamoda_without_caching_or_retrying(monkeypatch):
-    from mcp_core.cache import TTLCache
+@pytest.mark.parametrize(
+    "reply",
+    [
+        Reply(403, "<html>ServicePipe</html>", None),
+        Reply(429, "", None),
+        Reply(307, "", None, location="/catalogsearch/result/?q=a&__rr=1"),
+        Reply(200, "<html><title>Проверка</title><script src='/servicepipe.js'></script></html>", None),
+    ],
+    ids=["403", "429", "redirect", "anti-bot page"],
+)
+async def test_a_refusal_stops_lamoda_after_one_request(monkeypatch, reply):
+    urls = stub_http(monkeypatch, reply, ok(SEARCH_HTML))
 
-    monkeypatch.setattr(server, "_cache", TTLCache(ttl_s=300))
-    reads = []
-
-    class Page:
-        async def evaluate(self, expression):
-            reads.append(expression)
-            return json.dumps({"items": [], "body_snippet": "Подтвердите, что вы не робот"})
-
-    @asynccontextmanager
-    async def open_page(url, wait_ms):
-        yield Page()
-
-    monkeypatch.setattr(server, "open_page", open_page)
-    with pytest.raises(ToolError) as first:
+    with pytest.raises(ToolError):
         await server.lamoda_search("кроссовки")
-    with pytest.raises(ToolError) as second:
+    with pytest.raises(ToolError) as excinfo:
         await server.lamoda_search("кроссовки")
-
-    assert json.loads(str(first.value))["error"] == "challenge_required"
-    assert json.loads(str(second.value))["source_stopped"] is True
-    assert len(reads) == 1
-    assert len(server._cache) == 0
+    assert error_payload(excinfo.value)["source_stopped"] is True
+    assert len(urls) == 1
 
 
-# ---------------------------------------------------------- lamoda_selfcheck ----
+@pytest.mark.parametrize(
+    ("reply", "status", "challenge_type"),
+    [
+        (Reply(307, "", None, location="/?__rr=1"), 307, "redirect"),
+        (Reply(200, "<html><script src='/servicepipe.js'></script></html>", None), 200, "antibot_page"),
+    ],
+)
+async def test_a_refusal_names_what_lamoda_actually_answered(monkeypatch, reply, status, challenge_type):
+    stub_http(monkeypatch, reply)
 
-
-async def test_selfcheck_healthy_when_both_tiers_answer(monkeypatch):
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
-
-    result = await server.lamoda_selfcheck()
-
-    assert result.status == "success"
-    assert result.healthy is True
-    assert result.checks["card_graphql"].state == "healthy"
-    assert result.checks["search"].state == "healthy"
-
-
-async def test_selfcheck_graphql_down_is_inconclusive(monkeypatch):
-    async def fake_graphql(sku, ctx):
-        raise ToolError(server.TransportDownError("Lamoda GraphQL answered HTTP 502"))
-
-    monkeypatch.setattr(server, "_graphql_card", fake_graphql)
-    _patch_render(monkeypatch, SEARCH_EXTRACTED)
-
-    result = await server.lamoda_selfcheck()
-
-    assert result.status == "inconclusive"
-    assert result.checks["card_graphql"].state == "inconclusive"
-
-
-async def test_selfcheck_cdp_drift_is_flagged(monkeypatch):
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-    _patch_render(monkeypatch, {"title": "x", "items": []})
-
-    result = await server.lamoda_selfcheck()
-
-    assert result.status == "drift_detected"
-    assert result.checks["search"].state == "drift"
-
-
-async def test_selfcheck_anti_bot_page_is_inconclusive(monkeypatch):
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-    _patch_render(monkeypatch, {"title": "__BLOCKED__", "items": []})
-
-    result = await server.lamoda_selfcheck()
-
-    assert result.status == "inconclusive"
-    assert result.checks["search"].state == "inconclusive"
-    assert result.checks["search"].reason == "blocked"
-
-
-async def test_selfcheck_cries_shape_drift_when_the_price_family_vanishes(monkeypatch):
-    """Tiles still extract, but every key the parser binds a price through is
-    gone — that is structural drift, and it must be said out loud with the
-    missing family named."""
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-    _patch_render(
-        monkeypatch,
-        {
-            "title": "кроссовки — Lamoda",
-            "items": [{"sku": "MP002XM1RMM3", "title": "Кроссовки Nike Air Max", "url": "https://www.lamoda.ru/p/x/"}],
-        },
+    with pytest.raises(ToolError) as excinfo:
+        await server.lamoda_search("кроссовки")
+    payload = error_payload(excinfo.value)
+    assert (payload["error"], payload["status_code"], payload["challenge_type"]) == (
+        "challenge_required",
+        status,
+        challenge_type,
     )
 
-    result = await server.lamoda_selfcheck()
 
-    assert result.status == "drift_detected"
-    search = result.checks["search"]
-    assert search.state == "drift"
-    assert search.reason == "shape_drift"
-    assert any("price" in note for note in search.notes)
+# -------------------------------------------------------------------- card ----
 
 
-async def test_selfcheck_price_shape_drift_survives_challenge_copy(monkeypatch):
-    """Visible challenge wording in product copy cannot suppress shape drift."""
-    _patch_graphql(monkeypatch, GRAPHQL_PRODUCT)
-    _patch_render(
+async def test_card_reads_the_product_page(monkeypatch):
+    urls = stub_http(monkeypatch, ok(CARD_HTML))
+
+    card = await server.lamoda_card(CARD_URL + "?utm=x")
+
+    assert urls == [CARD_URL]
+    assert (card.sku, card.title, card.brand) == ("RTLAEU059301", "Кеды HANDBALL SPEZIAL W", "adidas Originals")
+    assert (card.price_rub, card.old_price_rub, card.promo_until) == (8063.0, 15999.0, "2026-09-27T23:59:59.000+03:00")
+    assert (card.rating, card.review_count, card.seller, card.is_available) == (4.7, 95, "Lamoda", True)
+    assert [s.size for s in card.sizes if s.is_available] == ["35,5", "36", "37", "37,5", "38,5", "40"]
+    assert card.url == CARD_URL
+    assert card.meta.warnings == []
+
+
+async def test_a_bare_sku_follows_the_canonical_redirect_once(monkeypatch):
+    urls = stub_http(
         monkeypatch,
-        {
-            "title": "Кроссовки — Lamoda",
-            "body_snippet": "Кроссовки с защитой от робота; пройти проверку размера",
-            "items": [
-                {
-                    "sku": "MP002XM1RMM3",
-                    "title": "Кроссовки без цены",
-                    "url": "https://www.lamoda.ru/p/mp002xm1rmm3/",
-                }
-            ],
-        },
+        Reply(301, "", None, location="/p/rtlaeu059301/shoes-adidasoriginals-kedy/"),
+        ok(CARD_HTML),
     )
 
-    result = await server.lamoda_selfcheck()
+    card = await server.lamoda_card("RTLAEU059301")
 
-    assert result.status == "drift_detected"
-    assert result.checks["search"].state == "drift"
-    assert result.checks["search"].reason == "shape_drift"
+    assert urls == ["https://www.lamoda.ru/p/rtlaeu059301/", CARD_URL]
+    assert card.price_rub == 8063.0
 
 
-# ------------------------------------------------------------------- helpers ----
+async def test_a_redirect_elsewhere_stops_lamoda(monkeypatch):
+    urls = stub_http(monkeypatch, Reply(302, "", None, location="https://www.lamoda.ru/?__rr=1"))
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.lamoda_card("RTLAEU059301")
+    assert error_payload(excinfo.value)["error"] == "challenge_required"
+    assert len(urls) == 1
+
+
+async def test_an_unknown_sku_is_not_found(monkeypatch):
+    stub_http(monkeypatch, Reply(404, "<html>404</html>", None))
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.lamoda_card(CARD_URL)
+    assert error_payload(excinfo.value)["error"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "   ", "not a sku", "https://evil.example/p/rtlaeu059301/", "https://www.lamoda.ru/c/17/shoes/"]
+)
+async def test_card_rejects_input_without_a_lamoda_sku(bad):
+    with pytest.raises(ToolError) as excinfo:
+        await server.lamoda_card(bad)
+    assert error_payload(excinfo.value)["error"] == "bad_request"
 
 
 def test_extract_sku():
     assert server._extract_sku("MP002XM1RMM3") == "MP002XM1RMM3"
-    assert server._extract_sku("https://www.lamoda.ru/p/mp002xm1rmm3/shoes/") == "MP002XM1RMM3"
-    assert server._extract_sku("кроссовки") is None
+    assert server._extract_sku("https://www.lamoda.ru/p/mp002xm1rmm3/shoes-nike/") == "MP002XM1RMM3"
+    assert server._extract_sku("!!") is None
 
 
-# --------------------------------------------------------- GraphQL error block ----
-#
-# GraphQL answers HTTP 200 with an `errors` array when a field or argument is
-# rejected. The connector used to read only `data.products`, so that case
-# surfaced as "no data.products list" — parser drift — and sent the reader to
-# inspect our parsing while the server had already explained itself. It also
-# asked for `old_price`, which is not the published field name (`old_price_amount`),
-# so the whole query was rejected.
+# --------------------------------------------------------------- selfcheck ----
 
 
-def test_the_query_asks_for_the_published_field_names():
-    assert "old_price_amount" in server._GRAPHQL_QUERY
-    assert "price_amount" in server._GRAPHQL_QUERY
-    # `old_price` alone was the name that made Lamoda reject the query.
-    assert " old_price " not in server._GRAPHQL_QUERY
+async def test_selfcheck_healthy_after_search_and_card(monkeypatch):
+    urls = stub_http(monkeypatch, ok(SEARCH_HTML), ok(CARD_HTML))
 
+    result = await server.lamoda_selfcheck()
 
-def test_the_card_reads_either_old_price_name():
-    """Tolerant on the way in, so a rename in either direction keeps working."""
-    from mcp_core import resilience as R
+    assert result.status == "success"
+    assert {name: check.state for name, check in result.checks.items()} == {"search": "healthy", "card": "healthy"}
+    assert urls[1] == CARD_URL
 
-    assert R.first_present({"old_price_amount": 5990}, "old_price_amount", "old_price") == 5990
-    assert R.first_present({"old_price": 5990}, "old_price_amount", "old_price") == 5990
 
+async def test_selfcheck_refusal_is_inconclusive_and_skips_the_card(monkeypatch):
+    urls = stub_http(monkeypatch, Reply(403, "", None))
 
-async def test_a_graphql_error_block_is_reported_verbatim(monkeypatch):
-    """The server's own message beats a generic drift verdict."""
+    result = await server.lamoda_selfcheck()
 
-    class FakeResponse:
-        status_code = 200
-        content = b"{}"
-        text = "{}"
+    assert {name: check.state for name, check in result.checks.items()} == {
+        "search": "inconclusive",
+        "card": "inconclusive",
+    }
+    assert len(urls) == 1
 
-        def json(self):
-            return {"errors": [{"message": 'Cannot query field "old_price" on type "Product".'}]}
 
-    class FakeClient:
-        async def __aenter__(self):
-            return self
+async def test_selfcheck_drift_when_the_payload_moves(monkeypatch):
+    stub_http(monkeypatch, ok(re.sub(r"payload:", "data2:", SEARCH_HTML)))
 
-        async def __aexit__(self, *exc):
-            return False
+    result = await server.lamoda_selfcheck()
 
-        async def post(self, url, json=None):
-            return FakeResponse()
-
-    monkeypatch.setattr(server, "build_client", lambda **kwargs: FakeClient())
-    server._cache._data.clear()
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._graphql_card("MP002XM1RMM3", None)
-
-    message = str(excinfo.value)
-    assert "rejected the query" in message
-    assert "old_price" in message, "the server's own wording must survive"
-
-
-# ------------------------------------------------------ GraphQL request shape ----
-
-
-async def test_the_graphql_request_carries_a_referer_for_the_sku(monkeypatch):
-    """The route supports a product page, and working requests name that page.
-
-    Lamoda search works from the same IP while card_graphql does not, so the
-    difference is in the request, not the network.
-    """
-    seen: dict[str, object] = {}
-
-    class FakeResponse:
-        status_code = 200
-        content = b"{}"
-        text = "{}"
-
-        def json(self):
-            return {"data": {"products": [{"sku": "MP002XM1RMM3", "name": "x", "price_amount": 100}]}}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, json=None):
-            return FakeResponse()
-
-    def capture(**kwargs):
-        seen.update(kwargs)
-        return FakeClient()
-
-    monkeypatch.setattr(server, "build_client", capture)
-    server._cache._data.clear()
-
-    await server._graphql_card("MP002XM1RMM3", None)
-
-    referer = seen["headers"]["Referer"]
-    assert referer == "https://www.lamoda.ru/p/mp002xm1rmm3/"
-    # The shared header dict must not be mutated for every later request.
-    assert "Referer" not in server._HEADERS
-
-
-async def test_a_non_200_carries_a_body_preview(monkeypatch):
-    """A bare status code is a dead end; the body is the clue."""
-
-    class FakeResponse:
-        status_code = 403
-        content = b"blocked by policy"
-        text = "blocked by policy"
-
-        def json(self):
-            return {}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, json=None):
-            return FakeResponse()
-
-    monkeypatch.setattr(server, "build_client", lambda **kwargs: FakeClient())
-    server._cache._data.clear()
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._graphql_card("MP002XM1RMM3", None)
-
-    message = str(excinfo.value)
-    assert "403" in message
-    assert "blocked by policy" in message
-
-
-# ------------------------------------------------- the real GraphQL envelope ----
-#
-# Captured live against https://www.lamoda.ru/goapi/v2/catalog/graphql/products/
-# in July 2026. Lamoda does not use the standard GraphQL envelope:
-#
-#   found     {"error": null, "result": [{...}]}
-#   unknown   {"error": null, "result": null}
-#   bad field {"error": "Internal server error", "code": -32603}
-#
-# The connector read `data.products` and an `errors` array, so every response
-# looked like parser drift — including the successful ones. Asking for
-# `old_price` instead of the published `old_price_amount` produced exactly the
-# -32603 body above.
-
-REAL_FOUND = {
-    "error": None,
-    "result": [
-        {
-            "brand_name": "Finn Flare",
-            "old_price_amount": 18499,
-            "sizes": [
-                {"is_available": False, "size": "48", "stock_remains": 0},
-                {"is_available": False, "size": "50", "stock_remains": 0},
-            ],
-            "discount": 15,
-            "sku": "MP002XM1RMM3",
-            "name": "Куртка кожаная",
-            "price_amount": 15724,
-            "is_available": False,
-            "is_sellable": True,
-            "stock_remains": 0,
-        }
-    ],
-}
-REAL_UNKNOWN = {"error": None, "result": None}
-REAL_BAD_FIELD = {"error": "Internal server error", "code": -32603}
-
-
-def _patch_graphql_response(monkeypatch, payload, status=200):
-    class FakeResponse:
-        status_code = status
-        content = b"{}"
-        text = "{}"
-
-        def json(self):
-            return payload
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, json=None):
-            return FakeResponse()
-
-    monkeypatch.setattr(server, "build_client", lambda **kwargs: FakeClient())
-    server._cache._data.clear()
-
-
-async def test_the_real_found_envelope_parses(monkeypatch):
-    _patch_graphql_response(monkeypatch, REAL_FOUND)
-
-    product = await server._graphql_card("MP002XM1RMM3", None)
-
-    assert product["name"] == "Куртка кожаная"
-    assert product["price_amount"] == 15724
-    assert product["old_price_amount"] == 18499
-
-
-async def test_the_card_maps_the_real_envelope_end_to_end(monkeypatch):
-    _patch_graphql_response(monkeypatch, REAL_FOUND)
-
-    result = await server.lamoda_card("MP002XM1RMM3")
-
-    assert result.price_rub == 15724
-    assert result.old_price_rub == 18499, "old_price_amount must reach the response"
-    assert result.brand == "Finn Flare"
-    assert result.is_available is False
-
-
-async def test_a_null_result_is_not_found_not_drift(monkeypatch):
-    """`result: null` is how an unknown SKU comes back."""
-    _patch_graphql_response(monkeypatch, REAL_UNKNOWN)
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._graphql_card("ZZ999ZZ999Z9", None)
-
-    assert "not_found" in str(excinfo.value)
-
-
-async def test_the_single_error_string_is_reported(monkeypatch):
-    """Their failure shape is one `error` string plus a code, not an errors array."""
-    _patch_graphql_response(monkeypatch, REAL_BAD_FIELD)
-
-    with pytest.raises(ToolError) as excinfo:
-        await server._graphql_card("MP002XM1RMM3", None)
-
-    message = str(excinfo.value)
-    assert "Internal server error" in message
-    assert "-32603" in message
-    assert "field name" in message, "the message must point at the likely cause"
-
-
-async def test_the_standard_graphql_shape_still_works(monkeypatch):
-    """Fallback if Lamoda ever moves to data.products."""
-    _patch_graphql_response(monkeypatch, {"data": {"products": [{"sku": "X", "name": "y", "price_amount": 1}]}})
-
-    product = await server._graphql_card("X", None)
-
-    assert product["name"] == "y"
+    assert result.checks["search"].state == "drift"

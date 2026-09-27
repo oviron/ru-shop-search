@@ -43,10 +43,10 @@ class DetmirSettings(BaseSettings):
         description="Hard cap on a response body. Listings with facets reach ~700 KB, so the cap sits well above that.",
     )
     net_retries: int = Field(
-        default=2,
+        default=1,
         ge=0,
-        le=5,
-        description="Retries after the first attempt, for transport faults only. The API returns sporadic 502s.",
+        le=1,
+        description="Retries after the first attempt, for network faults and 502/503/504 only; at most one.",
     )
     net_backoff_s: float = Field(
         default=0.8,

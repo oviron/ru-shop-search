@@ -27,7 +27,7 @@ inside a real browser.
 | Detsky Mir | ⚠️ с домашнего ✅, с хостинга 418 | DDoS-Guard: 418 по адресу | ✅ `curl_cffi` |
 | Ozon | ❌ 307 loop | Cloudflare | ✅ via your Chrome |
 | Avito | ❌ 403 firewall | IP reputation + captcha | ✅ via your Chrome |
-| Lamoda | ⚠️ partial | anti-bot redirect loop | ✅ via your Chrome |
+| Lamoda | ❌ ServicePipe; с домашнего ✅ | ServicePipe: отказ по адресу | ✅ `curl_cffi` |
 | DNS | ❌ 401 | Qrator JS proof-of-work | ✅ via your Chrome |
 | Citilink | ❌ 429 | Qrator rate block | ✅ via your Chrome |
 | AliExpress | ❌ x5sec challenge | x5sec; search works in a real Chrome | ✅ via your Chrome |
@@ -88,8 +88,8 @@ Chrome, то есть ровно из того окружения, ради ко
 
 Отдельно про Lamoda: её GraphQL-эндпоинт ответил **с датацентрового адреса**,
 хотя HTML-страницы того же домена отдают «Запрос отклонен». То есть анонимный
-tier карточек живёт по своим правилам, и архитектура «карточка через GraphQL,
-поиск через CDP» подтверждается напрямую. Снятые конверты (июль 2026):
+tier карточек живёт по своим правилам. Снятые конверты (июль 2026), GraphQL плагин с
+сентября 2026 не использует:
 
 | Запрос | Ответ |
 |---|---|
@@ -208,6 +208,37 @@ worth knowing:
 - **Промокодная цена не цена.** `priceWithBestVoucher` требует промокод, в `price_rub` она
   не идёт.
 
+### Lamoda — страницы сайта по HTTP
+
+Проверено 2026-09-27 с домашнего адреса, `curl_cffi` как Chrome, без кук. С VPS в
+датацентре те же страницы закрывает ServicePipe, в июле 2026 с других адресов было
+«Запрос отклонен» — значит, это отказ по адресу, а не по запросу.
+
+- **Поиск** `/catalogsearch/result/?q=` отвечает 200 за 0,8 с. Данные лежат JSON-ом за
+  вторым ключом `payload:` в `window.__NUXT__`: `products` (60 на страницу),
+  `pagination.found`, `products_meta`. На бессмысленный запрос выдача честно пустая
+  (`found: 0`), а исправленный сайтом запрос помечен `is_predicted_term_corrected`.
+- **Карточка** `/p/<sku>/<seo_tail>/` отвечает 200, в том же месте лежит `product`.
+  Голый `/p/<sku>/` отвечает 301 на каноничный адрес; коннектор идёт по нему один раз и
+  только на тот же SKU. Любой другой редирект — отказ.
+- **Цена — цепочка.** Исходная цена, затем скидка сайта (`onsite`), затем акция сайта
+  (`onsite_promo`) с `active_to`. У акции нет промокода, её получает любой покупатель
+  до срока, и плитка сайта показывает именно её. `price_rub` — последняя ступень,
+  `promo_until` — конец акции. Ступень с промокодом или неизвестного типа обрывает
+  цепочку и даёт предупреждение.
+- **GraphQL не годится для цены.** `POST /goapi/v2/catalog/graphql/products/` отдаёт
+  `price_amount` без акции: 11 199 ₽ там, где сайт и страница товара показывают
+  8 063 ₽. Поэтому карточка читает страницу товара, а не GraphQL.
+- **Рейтинг** в поиске по шкале 0..100 (94,99), в карточке 0..5 (4,7). Коннектор
+  делит поисковый на 20. Если поиск перейдёт на 0..5, рейтинги молча станут в 20 раз
+  меньше: проверки на это нет.
+- **Строки поиска.** Строка без `sku` выпадает с предупреждением `row_skipped`, строка
+  без цены остаётся с `<sku>: no_price`. Без `is_sellable` наличие неизвестно (`None`),
+  а не «нет».
+- **Отказ.** 401/403/418/429, редирект, кроме каноничного, и страница без `__NUXT__`
+  со словами антибота останавливают Лэмоду на 30 минут. В ошибке `challenge_required`
+  стоит настоящий статус и `challenge_type`: `redirect` или `antibot_page`.
+
 ### Ozon — needs your browser
 
 `composer-api.bx` answers a datacenter IP with an endless self-referential 307
@@ -273,45 +304,9 @@ confirm them end to end. The CDP tier changed that — in a real Chrome the
 proof-of-work and IP-reputation challenges pass natively. All four shipped in
 v1.2.0, and the July 2026 run on the maintainer's residential IP and logged-in
 Chrome finally confirmed them end to end. DNS and Citilink went healthy once the
-product-id regex was fixed. Megamarket and Lamoda did not: the challenge passes
-but the result comes back empty or link-less, which the sections below explain.
-Run the `*_selfcheck` tools from your own session before quoting either of those.
-
-### Lamoda — prices without discovery
-
-One channel genuinely works anonymously:
-
-```
-POST https://www.lamoda.ru/goapi/v2/catalog/graphql/products/
-Content-Type: application/json
-{"query": "query { products(skus: [\"MP002XM1RMM3\"]) { sku name brand_name price_amount is_available sizes { size is_available } } }"}
-```
-
-That returns real prices, brands, availability and sizes. But:
-
-- Catalog and search GET paths return the same self-referential 307 loop as Ozon.
-- Depending on the Chrome profile and IP, the browser can instead receive an
-  HTTP 200 anti-bot challenge page ("Пожалуйста, пройдите проверку") with no
-  product links. This is still a block, not an empty search result; the
-  connector reports it as `inconclusive/blocked` rather than parser drift.
-- HTML pages can also return 403 even with a full browser header set.
-- `rating` is not in the schema; introspection is disabled.
-- The mobile API (`api.lamoda.ru`) returns 403.
-
-**Verdict:** shipped in v1.2.0 as two tiers. Cards come from the anonymous GraphQL
-endpoint (works tier 1, no ratings — `rating` is not in the schema); search runs
-through the CDP tier, which is what supplies the discovery the GraphQL lacks.
-
-The split is right, and the July 2026 run is why it matters. The public GraphQL
-endpoint `POST /goapi/v2/catalog/graphql/products/` takes a list of SKUs, not a
-search query — it enriches known products, and there is no public search API at
-all. Every open-source Lamoda scraper reads catalog pages for discovery, which is
-exactly this connector's architecture. So when the live run found the search page
-rendering zero `/p/` product links with no embedded product JSON state, and the
-anonymous GraphQL card endpoint no longer answering either, that is a block or a
-layout change on top of the right design — not a missing endpoint to go hunting
-for. Cards and search were both down that day; run `lamoda_selfcheck` from a
-residential IP to tell a layout drift from a block before you conclude anything.
+product-id regex was fixed. Megamarket did not: the challenge passes but the
+result comes back empty. Lamoda did not either, and has since left the CDP tier:
+from a home address its pages answer plain HTTP (see below).
 
 ### DNS — proof-of-work challenge
 

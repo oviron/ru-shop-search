@@ -34,14 +34,12 @@ from mcp_core.transport.chrome_cdp import NavBlocked, open_page
 SOURCES: dict[str, tuple[str, str]] = {
     "citilink": ("https://www.citilink.ru/search/?text={q}", "/product/"),
     "dns": ("https://www.dns-shop.ru/search/?q={q}", "/product/"),
-    "lamoda": ("https://www.lamoda.ru/catalogsearch/result/?q={q}", "/p/"),
 }
 
 
 DEFAULT_QUERY = {
     "citilink": "ноутбук",
     "dns": "ноутбук",
-    "lamoda": "кроссовки",
 }
 
 # Structure only. No innerText, no attribute values beyond hrefs we already

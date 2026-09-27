@@ -113,8 +113,10 @@ class PermissionDeniedError(ConnectorError):
 class ChallengeRequiredError(ConnectorError):
     """A marketplace put an anti-bot challenge in front of the data."""
 
-    def __init__(self, message: str, *, provider: str | None = None, challenge_type: str = "captcha") -> None:
-        super().__init__(ErrorCode.CHALLENGE_REQUIRED, message, provider=provider, status_code=403)
+    def __init__(
+        self, message: str, *, provider: str | None = None, challenge_type: str = "captcha", status_code: int = 403
+    ) -> None:
+        super().__init__(ErrorCode.CHALLENGE_REQUIRED, message, provider=provider, status_code=status_code)
         self.challenge_type = challenge_type
 
     def to_dict(self) -> dict:

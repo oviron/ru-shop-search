@@ -1,0 +1,9 @@
+{
+  "url": "https://www.lamoda.ru/catalogsearch/result/?q=%D0%BA%D1%80%D0%BE%D1%81%D1%81%D0%BE%D0%B2%D0%BA%D0%B8%20adidas",
+  "captured_at": "2026-09-27",
+  "sha256": "38c956894ad5faa8a8ede77d6f10a727f87daf6df0f845630337119cd5ed3219",
+  "method": "captured live on 2026-09-27 19:50 with curl_cffi (impersonate=chrome) from the home IP, no cookies. 638 KB page. Kept only the JSON behind the second `payload:` key of window.__NUXT__ (page_type, pagination, four products_meta fields and five of the 60 products, each cut to the keys the connector reads; sizes cut to size/is_available/stock_quantity); the surrounding HTML is a minimal stand-in with the same `payload: {\"…` layout",
+  "ground_truth": {
+    "note": "3878 found. RTLAEU059301: 15 999 → 11 199 (onsite −30%) → 8 063 (onsite_promo −28% until 2026-09-27 23:59). RTLAES035701: 8 999 → 6 299 (onsite_promo). RTLAES219202: 8 999, no discount. RTLADF666602: 16 999 → 7 999 (onsite). RTLAEN425302: 7 999, no rating. Site tiles showed 8 063, 6 299, 8 999, 7 999 as the price; GraphQL price_amount gave 11 199 and 8 999 for the first two, i.e. without the promo"
+  }
+}

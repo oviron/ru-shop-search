@@ -263,6 +263,16 @@ async def test_card_parses_price_rating_and_stock(monkeypatch, no_delay):
     assert result.meta.healthy is True
 
 
+async def test_a_card_read_clears_earlier_refusals(monkeypatch):
+    monkeypatch.setattr(server, "_limiter", Pacer(0.0))
+    server._limiter.record_refusal()
+    stub_page(monkeypatch, (200, json.dumps(CARD_PAYLOAD)))
+
+    await server.detmir_card(product_id=6673568)
+
+    assert server._limiter.consecutive_refusals == 0
+
+
 async def test_card_treats_404_in_a_200_body_as_not_found(monkeypatch, no_delay):
     """The signature Detsky Mir quirk: HTTP 200 carrying {"status": 404}."""
     stub_json(monkeypatch, {"/v2/products/1": {"status": 404, "error": "not_found"}})

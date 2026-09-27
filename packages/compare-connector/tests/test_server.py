@@ -131,6 +131,29 @@ async def test_detsky_mir_search_rows_become_offers(monkeypatch):
     assert offers[0].url == "https://www.detmir.ru/product/index/id/6750060/"
 
 
+async def test_lamoda_search_rows_become_offers(monkeypatch):
+    from lamoda_connector import server as lamoda
+    from mcp_core.transport import impersonated
+    from mcp_core.transport.impersonated import Reply
+
+    html = (Path(__file__).parents[2] / "lamoda-connector/tests/fixtures/search_live.html").read_text(encoding="utf-8")
+
+    async def fake_get(url, **kwargs):
+        return Reply(200, html, None)
+
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+    monkeypatch.setattr(lamoda._pacer, "min_gap", 0.0)
+    lamoda._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"lamoda": lamoda})
+
+    offers = await server._search_lamoda("кроссовки adidas", 2)
+
+    assert [(o.product_id, o.price_rub, o.brand, o.rating, o.rating_count, o.in_stock) for o in offers] == [
+        ("RTLAEU059301", 8063.0, "adidas Originals", 4.75, 95, True),
+        ("RTLAES035701", 6299.0, "adidas", 4.82, 58, True),
+    ]
+
+
 # ----------------------------------------------------------------- ranking ----
 
 

@@ -1,0 +1,9 @@
+{
+  "url": "https://www.lamoda.ru/p/rtlaeu059301/shoes-adidasoriginals-kedy/",
+  "captured_at": "2026-09-27",
+  "sha256": "e746e9b5094f0f161c66897c33d18950242a86950cde6d3ac6586f290d2cb19a",
+  "method": "captured live on 2026-09-27 19:51 with curl_cffi (impersonate=chrome) from the home IP, no cookies. 112 KB page. Kept only product fields the connector reads from the `payload: {\"product\"…}` JSON; reviews, questions and photo reviews (with buyer names) were dropped; sizes cut to title/sku/stock_quantity",
+  "ground_truth": {
+    "note": "adidas Originals Кеды HANDBALL SPEZIAL W: original 15 999, onsite 11 199, onsite_promo 8 063 until 2026-09-27 23:59 with an empty promocode; in stock, rating 4.7 from 95 reviews, seller Lamoda"
+  }
+}

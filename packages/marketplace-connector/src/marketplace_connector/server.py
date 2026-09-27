@@ -59,7 +59,7 @@ _SHOPS: tuple[tuple[str, str, str], ...] = (
     ("citilink", "Ситилинк", "http+browser-token"),
     ("mvideo", "М.Видео", "http"),
     ("detsky_mir", "Детский мир", "http"),
-    ("lamoda", "Лэмода", "browser"),
+    ("lamoda", "Лэмода", "http"),
     ("vseinstrumenti", "ВсеИнструменты", "http"),
     ("regard", "Regard", "http"),
     ("nix", "Никс", "http"),

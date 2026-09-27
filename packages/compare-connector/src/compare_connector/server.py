@@ -569,9 +569,9 @@ async def _search_avito(query: str, limit: int) -> list[MarketOffer]:
 
 
 async def _search_lamoda(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``lamoda_search`` results (CDP tier; Lamoda exposes no ratings)."""
+    """Adapt ``lamoda_search`` results (HTTP; price includes the code-free site promo)."""
     server = SOURCES["lamoda"]
-    response = await server.lamoda_search(query=query)
+    response = await server.lamoda_search(query=query, limit=min(limit, 60))
 
     offers: list[MarketOffer] = []
     for item in (getattr(response, "items", None) or [])[:limit]:
@@ -583,9 +583,9 @@ async def _search_lamoda(query: str, limit: int) -> list[MarketOffer]:
                 brand=item.brand or "",
                 seller="",
                 price_rub=item.price_rub,
-                rating=None,
-                rating_count=None,
-                in_stock=None,
+                rating=item.rating,
+                rating_count=item.review_count,
+                in_stock=item.in_stock,
                 url=item.url or "",
             )
         )
@@ -750,7 +750,8 @@ def _source_error(exc: Exception) -> dict[str, Any]:
         "retryable": code.retryable,
         "retry_after_s": round(retry_after) if isinstance(retry_after, int | float) and retry_after >= 0 else None,
         "challenge_type": challenge_type
-        if code == ErrorCode.CHALLENGE_REQUIRED and challenge_type in ("captcha", "login", "login_or_captcha")
+        if code == ErrorCode.CHALLENGE_REQUIRED
+        and challenge_type in ("captcha", "login", "login_or_captcha", "redirect", "antibot_page")
         else None,
     }
 
@@ -1270,7 +1271,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "price and does not rank, the everyday price comes from card"
             ),
             "yandex_market": "reports both an everyday price and a Plus-subscriber price",
-            "lamoda": "search through the operator's Chrome; cards via anonymous GraphQL",
+            "lamoda": (
+                "search and cards read the site's pages over HTTP; price_rub includes a code-free "
+                "site promo, promo_until says when it ends"
+            ),
             "dns": "reachable only through the operator's Chrome (Qrator)",
             "citilink": "reachable only through the operator's Chrome (Qrator)",
             "aliexpress": (

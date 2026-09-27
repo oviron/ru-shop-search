@@ -23,10 +23,11 @@ class LamodaSettings(BaseSettings):
     min_gap: float = Field(default=3.0, ge=0)
     cache_ttl: float = Field(default=120.0, ge=0, description="Seconds to cache upstream reads. 0 disables caching.")
     max_body_bytes: int = Field(default=_DEFAULT_MAX_BODY_BYTES, gt=0)
+    selfcheck_query: str = Field(default="кроссовки adidas", min_length=1)
     proxy: SecretStr = Field(
         default=SecretStr(""),
         description=(
-            "Optional proxy URL for the tier-1 GraphQL fetch. Empty honours HTTPS_PROXY. "
+            "Optional proxy URL. Empty honours LAMODA_PROXY, then HTTPS_PROXY/ALL_PROXY. "
             "May carry user:pass credentials, so it is a SecretStr: repr/dump show '**********', "
             "and only the outbound fetch ever unwraps it."
         ),
