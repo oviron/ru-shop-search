@@ -1,0 +1,10 @@
+{
+  "url": "https://www.holodilnik.ru/search/?search=qzxwvkjh+plmnbq",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:45:45 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 200, windows-1251, re-saved as UTF-8. Kept: <title>, the header city, the «Найдено товаров» block and the catalog-item rows; dropped: <svg>, the Yandex Pay badge, onclick and data-event-* analytics attributes, header, filters, footer and scripts.",
+  "ground_truth": {
+    "total": "1",
+    "row": "an unrelated Aqara switch, артикул 761849, 5 499 ₽, «Нет в наличии» (window.hruGTMPageItems available_type not_available)"
+  },
+  "sha256": "f9b8bc9bb37fe1c6bdf6d4fdf4511639d12fe8e57ed9474261fc2598a7790d1b"
+}

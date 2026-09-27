@@ -38,6 +38,7 @@ EXPECTED_INSTALLED = {
     "vseinstrumenti",
     "regard",
     "nix",
+    "holodilnik",
     "aliexpress",
 }
 

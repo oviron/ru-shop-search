@@ -22,6 +22,7 @@ ru-shop-search/
 │   ├── vseinstrumenti-connector/ VseInstrumenti     → vseinstrumenti-mcp
 │   ├── regard-connector/       Regard               → regard-mcp
 │   ├── nix-connector/          Nix                  → nix-mcp
+│   ├── holodilnik-connector/   Holodilnik           → holodilnik-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
 │   └── marketplace-connector/  plugin server + CLI  → marketplace-mcp

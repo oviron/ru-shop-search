@@ -27,6 +27,7 @@ dependencies = [
     "vseinstrumenti-connector",
     "regard-connector",
     "nix-connector",
+    "holodilnik-connector",
     "aliexpress-connector",
     "compare-connector",
 ]
@@ -55,5 +56,6 @@ mvideo-connector = { workspace = true }
 vseinstrumenti-connector = { workspace = true }
 regard-connector = { workspace = true }
 nix-connector = { workspace = true }
+holodilnik-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
 compare-connector = { workspace = true }

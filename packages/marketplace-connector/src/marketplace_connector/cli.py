@@ -41,6 +41,7 @@ _SELFCHECKS: list[tuple[str, str, str]] = [
     ("vseinstrumenti", "vseinstrumenti_connector.server", "vseinstrumenti_selfcheck"),
     ("regard", "regard_connector.server", "regard_selfcheck"),
     ("nix", "nix_connector.server", "nix_selfcheck"),
+    ("holodilnik", "holodilnik_connector.server", "holodilnik_selfcheck"),
     ("aliexpress", "aliexpress_connector.server", "aliexpress_selfcheck"),
 ]
 

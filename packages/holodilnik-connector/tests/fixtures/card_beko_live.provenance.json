@@ -1,0 +1,15 @@
+{
+  "url": "https://www.holodilnik.ru/refrigerator/two_chambered_refrigerators/beko/b1rcsk332w_belyy/",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 22:14:49 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 200, windows-1251. A minimal stand-in re-saved as UTF-8, built like card_atlant_live.html plus the visible price block (product-price__values). Dropped: photos, specs, shop stock table, forms, reviews and scripts.",
+  "ground_truth": {
+    "sku": "652459",
+    "price": "40899 RUB (microdata and product-price__current)",
+    "old_price": "41490 RUB (product-price__old; also price_old in the page's analytics object)",
+    "availability": "https://schema.org/InStock",
+    "rating": "5.00 of 12",
+    "gtin": "4680037178420",
+    "city": "Санкт-Петербург"
+  },
+  "sha256": "c86ce72255dd49cac441a589d2693c07c818c6685c149b2631b73144c9ab8c2c"
+}

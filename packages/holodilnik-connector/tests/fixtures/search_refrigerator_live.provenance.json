@@ -1,0 +1,10 @@
+{
+  "url": "https://www.holodilnik.ru/search/?search=%D1%85%D0%BE%D0%BB%D0%BE%D0%B4%D0%B8%D0%BB%D1%8C%D0%BD%D0%B8%D0%BA",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:43:41 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 200, windows-1251, re-saved as UTF-8. Kept: <title>, the header city, the «Найдено товаров» block and the catalog-item rows; dropped: <svg>, the Yandex Pay badge, onclick and data-event-* analytics attributes, header, filters, footer and scripts. The first 3 of 24 rows kept.",
+  "ground_truth": {
+    "total": "3818",
+    "rows": "171749 33 499 ₽; 652459 40 899 ₽ crossed out 41 490 ₽ (<s class=price-value__old>), 5 • 15 отзывов; 652469 58 999 ₽ (window.hruGTMPageItems prices 33499, 40899, 58999)"
+  },
+  "sha256": "1e21c40ecc27d6d29bd1244a364d255767689caaed5744b31e85f17fd8234785"
+}

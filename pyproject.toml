@@ -32,6 +32,7 @@ dependencies = [
     "vseinstrumenti-connector",
     "regard-connector",
     "nix-connector",
+    "holodilnik-connector",
     "aliexpress-connector",
     "marketplace-connector",
 ]
@@ -58,6 +59,7 @@ mvideo-connector = { workspace = true }
 vseinstrumenti-connector = { workspace = true }
 regard-connector = { workspace = true }
 nix-connector = { workspace = true }
+holodilnik-connector = { workspace = true }
 aliexpress-connector = { workspace = true }
 marketplace-connector = { workspace = true }
 
@@ -136,6 +138,7 @@ testpaths = [
     "packages/vseinstrumenti-connector/tests",
     "packages/regard-connector/tests",
     "packages/nix-connector/tests",
+    "packages/holodilnik-connector/tests",
     "packages/aliexpress-connector/tests",
     "packages/marketplace-connector/tests",
 ]
@@ -168,6 +171,7 @@ source = [
     "packages/vseinstrumenti-connector/src/vseinstrumenti_connector",
     "packages/regard-connector/src/regard_connector",
     "packages/nix-connector/src/nix_connector",
+    "packages/holodilnik-connector/src/holodilnik_connector",
     "packages/aliexpress-connector/src/aliexpress_connector",
     "packages/marketplace-connector/src/marketplace_connector",
 ]

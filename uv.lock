@@ -17,6 +17,7 @@ members = [
     "compare-connector",
     "detmir-connector",
     "dns-connector",
+    "holodilnik-connector",
     "lamoda-connector",
     "marketplace-connector",
     "mcp-core",
@@ -380,6 +381,7 @@ all = [
     { name = "avito-connector" },
     { name = "citilink-connector" },
     { name = "dns-connector" },
+    { name = "holodilnik-connector" },
     { name = "lamoda-connector" },
     { name = "mvideo-connector" },
     { name = "nix-connector" },
@@ -395,6 +397,9 @@ citilink = [
 ]
 dns = [
     { name = "dns-connector" },
+]
+holodilnik = [
+    { name = "holodilnik-connector" },
 ]
 lamoda = [
     { name = "lamoda-connector" },
@@ -427,6 +432,8 @@ requires-dist = [
     { name = "dns-connector", marker = "extra == 'all'", editable = "packages/dns-connector" },
     { name = "dns-connector", marker = "extra == 'dns'", editable = "packages/dns-connector" },
     { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "holodilnik-connector", marker = "extra == 'all'", editable = "packages/holodilnik-connector" },
+    { name = "holodilnik-connector", marker = "extra == 'holodilnik'", editable = "packages/holodilnik-connector" },
     { name = "lamoda-connector", marker = "extra == 'all'", editable = "packages/lamoda-connector" },
     { name = "lamoda-connector", marker = "extra == 'lamoda'", editable = "packages/lamoda-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
@@ -445,7 +452,7 @@ requires-dist = [
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "nix", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "nix", "holodilnik", "aliexpress", "all"]
 
 [[package]]
 name = "coverage"
@@ -866,6 +873,27 @@ wheels = [
 ]
 
 [[package]]
+name = "holodilnik-connector"
+version = "2.4.2"
+source = { editable = "packages/holodilnik-connector" }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1230,6 +1258,7 @@ dependencies = [
     { name = "detmir-connector" },
     { name = "dns-connector" },
     { name = "fastmcp" },
+    { name = "holodilnik-connector" },
     { name = "lamoda-connector" },
     { name = "mcp-core" },
     { name = "mvideo-connector" },
@@ -1251,6 +1280,7 @@ requires-dist = [
     { name = "detmir-connector", editable = "packages/detmir-connector" },
     { name = "dns-connector", editable = "packages/dns-connector" },
     { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "holodilnik-connector", editable = "packages/holodilnik-connector" },
     { name = "lamoda-connector", editable = "packages/lamoda-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
@@ -2086,6 +2116,7 @@ dependencies = [
     { name = "compare-connector" },
     { name = "detmir-connector" },
     { name = "dns-connector" },
+    { name = "holodilnik-connector" },
     { name = "lamoda-connector" },
     { name = "marketplace-connector" },
     { name = "mcp-core" },
@@ -2118,6 +2149,7 @@ requires-dist = [
     { name = "compare-connector", editable = "packages/compare-connector" },
     { name = "detmir-connector", editable = "packages/detmir-connector" },
     { name = "dns-connector", editable = "packages/dns-connector" },
+    { name = "holodilnik-connector", editable = "packages/holodilnik-connector" },
     { name = "lamoda-connector", editable = "packages/lamoda-connector" },
     { name = "marketplace-connector", editable = "packages/marketplace-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },

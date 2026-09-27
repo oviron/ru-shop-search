@@ -1,0 +1,12 @@
+{
+  "url": "https://www.holodilnik.ru/search/?search=%D1%85%D0%BE%D0%BB%D0%BE%D0%B4%D0%B8%D0%BB%D1%8C%D0%BD%D0%B8%D0%BA+atlant",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:42:45 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 200, windows-1251, re-saved as UTF-8. Kept: <title>, the header city, the «Найдено товаров» block and the catalog-item rows; dropped: <svg>, the Yandex Pay badge, onclick and data-event-* analytics attributes, header, filters, footer and scripts. All 24 rows kept.",
+  "ground_truth": {
+    "total": "186",
+    "city": "Санкт-Петербург",
+    "first row": "артикул 107818, 37 199 ₽, 4.5 • 74 отзыва, послезавтра (window.hruGTMPageItems: sku 107818, price 37199, available)",
+    "badges": "«Скидка 10%» is an app promo code, «Списывайте бонусы» a bonus offer; neither is a price"
+  },
+  "sha256": "21660cbbefe20eef4512a128b1bfec00562f1a25ed4b74343275996f9a7d6407"
+}

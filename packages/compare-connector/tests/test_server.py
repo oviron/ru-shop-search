@@ -285,6 +285,32 @@ async def test_regard_search_rows_become_offers(monkeypatch):
     )
 
 
+async def test_holodilnik_search_rows_become_offers(monkeypatch):
+    from holodilnik_connector import server as holodilnik
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from mcp_core.transport import impersonated
+    from mcp_core.transport.impersonated import Reply
+
+    fixture = Path(__file__).parents[2] / "holodilnik-connector/tests/fixtures/search_atlant_live.html"
+
+    async def fake_get(url, **kwargs):
+        return Reply(200, fixture.read_text(encoding="utf-8"), None)
+
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+    monkeypatch.setattr(holodilnik, "_pacer", Pacer(0.0, source="holodilnik", gate=StopGate(None)))
+    holodilnik._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"holodilnik": holodilnik})
+
+    offers = await server._search_holodilnik("холодильник atlant", 2)
+
+    assert [(o.product_id, o.price_rub, o.seller, o.rating, o.rating_count, o.in_stock) for o in offers] == [
+        ("107818", 37199.0, "Холодильник", 4.5, 74, True),
+        ("171749", 33499.0, "Холодильник", 4.65, 57, True),
+    ]
+    assert offers[0].url == "https://www.holodilnik.ru/refrigerator/two_chambered_refrigerators/atlant/xm_4012_022/"
+
+
 async def test_nix_search_rows_become_offers(monkeypatch):
     from contextlib import asynccontextmanager
 

@@ -1,0 +1,14 @@
+{
+  "url": "https://www.holodilnik.ru/refrigerator/two_chambered_refrigerators/atlant/xm_4012_022/",
+  "captured_at": "2026-09-27",
+  "method": "captured live on 2026-09-27 21:43:33 with curl_cffi (impersonate=chrome) from the home IP, no cookies; 200, windows-1251. A minimal stand-in re-saved as UTF-8: the original <title>, canonical link, header city, the schema.org Product head (name, AggregateRating), gtin, sku, Brand and Offer, and <h1>. Dropped: photos, specs, shop stock table, callback forms (cb_phone/cb_email templates, empty), reviews and scripts.",
+  "ground_truth": {
+    "sku": "107818 (also «артикул 107818» in the title)",
+    "price": "37199 RUB",
+    "availability": "https://schema.org/InStock",
+    "rating": "4.51 of 73",
+    "gtin": "4811159026935",
+    "city": "Санкт-Петербург"
+  },
+  "sha256": "af6f971700eb7a28539a0431e0441894f680607016f0c4a5982a676b477b8720"
+}

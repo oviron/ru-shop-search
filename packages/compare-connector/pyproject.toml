@@ -30,6 +30,7 @@ mvideo = ["mvideo-connector"]
 vseinstrumenti = ["vseinstrumenti-connector"]
 regard = ["regard-connector"]
 nix = ["nix-connector"]
+holodilnik = ["holodilnik-connector"]
 aliexpress = ["aliexpress-connector"]
 all = [
     "ozon-connector",
@@ -41,6 +42,7 @@ all = [
     "vseinstrumenti-connector",
     "regard-connector",
     "nix-connector",
+    "holodilnik-connector",
     "aliexpress-connector",
 ]
 
@@ -68,3 +70,4 @@ mvideo-connector = { workspace = true }
 vseinstrumenti-connector = { workspace = true }
 regard-connector = { workspace = true }
 nix-connector = { workspace = true }
+holodilnik-connector = { workspace = true }

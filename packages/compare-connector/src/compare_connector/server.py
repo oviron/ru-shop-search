@@ -81,6 +81,7 @@ _CARD_TOOL_NAMES = {
     "vseinstrumenti": "vseinstrumenti_card",
     "regard": "regard_card",
     "nix": "nix_card",
+    "holodilnik": "holodilnik_card",
     "aliexpress": "aliexpress_card",
 }
 
@@ -178,6 +179,13 @@ def _available_sources() -> dict[str, Any]:
         log_event("compare.source_unavailable", source="nix", error=_redact(str(exc))[:120])
 
     try:
+        from holodilnik_connector import server as holodilnik_server
+
+        sources["holodilnik"] = holodilnik_server
+    except Exception as exc:
+        log_event("compare.source_unavailable", source="holodilnik", error=_redact(str(exc))[:120])
+
+    try:
         from aliexpress_connector import server as aliexpress_server
 
         sources["aliexpress"] = aliexpress_server
@@ -206,6 +214,7 @@ SEARCHABLE = (
     "vseinstrumenti",
     "regard",
     "nix",
+    "holodilnik",
     "aliexpress",
     "detsky_mir",
 )
@@ -769,6 +778,29 @@ async def _search_nix(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+async def _search_holodilnik(query: str, limit: int) -> list[MarketOffer]:
+    """Adapt ``holodilnik_search`` results (the site's search page over HTTP, city by IP)."""
+    server = SOURCES["holodilnik"]
+    response = await server.holodilnik_search(query=query, limit=min(limit, 24))
+
+    offers: list[MarketOffer] = []
+    for item in (getattr(response, "items", None) or [])[:limit]:
+        offers.append(
+            MarketOffer(
+                source="holodilnik",
+                product_id=str(item.product_id or ""),
+                title=item.title or "",
+                seller="Холодильник",
+                price_rub=item.price_rub,
+                rating=item.rating,
+                rating_count=item.review_count,
+                in_stock=item.in_stock,
+                url=item.url or "",
+            )
+        )
+    return OfferBatch(offers, response)
+
+
 async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``aliexpress_search`` results (CDP tier; prices in rubles).
 
@@ -835,6 +867,7 @@ _SEARCH_IMPLS = {
     "vseinstrumenti": _search_vseinstrumenti,
     "regard": _search_regard,
     "nix": _search_nix,
+    "holodilnik": _search_holodilnik,
     "aliexpress": _search_aliexpress,
     "detsky_mir": _search_detmir,
 }
@@ -1220,6 +1253,7 @@ async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool
             "vseinstrumenti": "url",
             "regard": "url",
             "nix": "url",
+            "holodilnik": "url",
             "aliexpress": "item_id_or_url",
         }[name]
         result = await _gated(name, lambda: tool(**{argument: product_id_or_url}))
@@ -1432,6 +1466,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             "nix": (
                 "search renders in the plugin's Chrome tab, cards read the page over HTTP, "
                 "Moscow prices; СУПЕРЦЕНА (prepay and pickup) is never the price"
+            ),
+            "holodilnik": (
+                "search and cards read the site's pages over HTTP, prices for the city the site "
+                "picks by IP; app promo codes and bonuses are never price, a card opens by its URL"
             ),
             "aliexpress": (
                 "reachable only through the operator's Chrome (x5sec); a challenged session "
