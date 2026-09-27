@@ -37,6 +37,7 @@ from mcp_core.cache import TTLCache
 from mcp_core.dom import JS_HELPERS, prices_from_tile, title_from_tile
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     ParserDriftError,
     ToolError,
     TransportDownError,
@@ -98,7 +99,7 @@ mcp = FastMCP(
 mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="citilink")
 _cdp_lock = asyncio.Lock()
 
 
@@ -366,6 +367,8 @@ async def citilink_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"citilink_search failed: {exc}")))
@@ -457,6 +460,8 @@ async def citilink_card(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"citilink_card failed: {exc}")))
@@ -490,6 +495,8 @@ async def citilink_selfcheck(ctx: Context | None = None) -> CitilinkSelfcheckRes
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("citilink_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"citilink_selfcheck failed: {exc}")))

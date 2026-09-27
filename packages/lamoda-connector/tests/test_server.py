@@ -169,7 +169,7 @@ async def test_search_empty_visible_challenge_is_transport_down(monkeypatch):
     assert "challenge" in str(excinfo.value).lower()
 
 
-async def test_challenge_recovery_bypasses_failed_payload_cache(monkeypatch):
+async def test_a_challenge_stops_lamoda_without_caching_or_retrying(monkeypatch):
     from mcp_core.cache import TTLCache
 
     monkeypatch.setattr(server, "_cache", TTLCache(ttl_s=300))
@@ -178,24 +178,22 @@ async def test_challenge_recovery_bypasses_failed_payload_cache(monkeypatch):
     class Page:
         async def evaluate(self, expression):
             reads.append(expression)
-            payload = (
-                {"items": [], "body_snippet": "Подтвердите, что вы не робот"} if len(reads) == 1 else SEARCH_EXTRACTED
-            )
-            return json.dumps(payload)
+            return json.dumps({"items": [], "body_snippet": "Подтвердите, что вы не робот"})
 
     @asynccontextmanager
     async def open_page(url, wait_ms):
         yield Page()
 
     monkeypatch.setattr(server, "open_page", open_page)
-    with pytest.raises(ToolError) as excinfo:
+    with pytest.raises(ToolError) as first:
         await server.lamoda_search("кроссовки")
-    assert json.loads(str(excinfo.value))["error"] == "challenge_required"
+    with pytest.raises(ToolError) as second:
+        await server.lamoda_search("кроссовки")
+
+    assert json.loads(str(first.value))["error"] == "challenge_required"
+    assert json.loads(str(second.value))["source_stopped"] is True
+    assert len(reads) == 1
     assert len(server._cache) == 0
-    recovered = await server.lamoda_search("кроссовки")
-    assert recovered.count > 0
-    await server.lamoda_search("кроссовки")
-    assert len(reads) == 2  # the successful payload still uses the normal cache
 
 
 # ---------------------------------------------------------- lamoda_selfcheck ----

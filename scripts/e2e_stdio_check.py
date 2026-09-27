@@ -7,8 +7,8 @@ ways a stdio MCP server actually fails for a user.
 
 This script launches each server the way a client does (console script,
 stdio), performs initialize / tools/list / tools/call, and reports what it
-saw. Tools that would hit the network are not called; ``marketplace_sources``
-is, because it is pure local state.
+saw. Tools that would hit the network are not called; ``shops`` is, because it
+is pure local state.
 
 Run: uv run python scripts/e2e_stdio_check.py
 """
@@ -24,33 +24,12 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# script name -> how many model-facing tools it must expose. Operator-only
-# *_selfcheck canaries are no longer MCP tools (they run via
-# `marketplace-mcp doctor`). The unified server exposes 40 model-facing tools.
-EXPECTED_TOOLS = {
-    "wb-mcp": 8,
-    "ozon-mcp": 3,
-    "detmir-mcp": 3,
-    "yandex-mcp": 2,
-    "compare-mcp": 4,
-    "avito-mcp": 3,
-    "lamoda-mcp": 2,
-    "dns-mcp": 2,
-    "citilink-mcp": 2,
-    "aliexpress-mcp": 2,
-    "marketplace-mcp": 32,  # 31 mounted + marketplace_sources
-}
-
-TIMEOUT_S = 60.0
-EXPECTED_VERSION = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))[
-    "project"
-]["version"]
-EXPECTED_MOUNTS = {
+EXPECTED_TOOLS = {"marketplace-mcp": {"search", "card", "shops"}}
+EXPECTED_INSTALLED = {
     "wildberries",
     "ozon",
-    "detmir",
-    "yandex",
-    "compare",
+    "yandex_market",
+    "detsky_mir",
     "avito",
     "lamoda",
     "dns",
@@ -58,26 +37,28 @@ EXPECTED_MOUNTS = {
     "aliexpress",
 }
 
+TIMEOUT_S = 60.0
+EXPECTED_VERSION = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))[
+    "project"
+]["version"]
 
-def validate_sources(payload: object) -> str | None:
+
+def validate_shops(payload: object) -> str | None:
     """Reject incomplete introspection even when tools/call itself succeeded."""
     if not isinstance(payload, dict):
-        return "marketplace_sources did not return structured content"
-    mounted = payload.get("mounted")
-    if not isinstance(mounted, list) or not all(isinstance(name, str) for name in mounted):
-        return "marketplace_sources returned an invalid mounted list"
-    if set(mounted) != EXPECTED_MOUNTS or len(mounted) != len(EXPECTED_MOUNTS):
-        return f"expected mounted sources {sorted(EXPECTED_MOUNTS)}, got {mounted}"
-    if payload.get("mounted_count") != len(EXPECTED_MOUNTS):
-        return f"incorrect mounted_count: {payload.get('mounted_count')}"
-    if payload.get("skipped") != {} or payload.get("skipped_count") != 0:
-        return f"sources failed to mount or skipped status is incomplete: {payload.get('skipped')}"
+        return "shops did not return structured content"
+    shops = payload.get("shops")
+    if not isinstance(shops, list) or not all(isinstance(shop, dict) for shop in shops):
+        return "shops returned an invalid list"
+    installed = {shop.get("key") for shop in shops if shop.get("installed") is True}
+    if installed != EXPECTED_INSTALLED:
+        return f"expected installed shops {sorted(EXPECTED_INSTALLED)}, got {sorted(map(str, installed))}"
     if payload.get("server_version") != EXPECTED_VERSION:
-        return f"marketplace_sources version must be {EXPECTED_VERSION}, got {payload.get('server_version')}"
+        return f"shops version must be {EXPECTED_VERSION}, got {payload.get('server_version')}"
     return None
 
 
-async def probe(script: str, expected: int) -> tuple[str, bool, str]:
+async def probe(script: str, expected: set[str]) -> tuple[str, bool, str]:
     path = shutil.which(script)
     if path is None:
         return script, False, "console script not on PATH"
@@ -94,26 +75,18 @@ async def probe(script: str, expected: int) -> tuple[str, bool, str]:
             detail = f"{count} tools, server={server_name} v{version}"
             if version != EXPECTED_VERSION:
                 return script, False, f"expected version {EXPECTED_VERSION}, got {version}"
-            if count != expected:
-                return script, False, f"expected {expected} tools, got {count}"
-            if len({tool.name for tool in listed.tools}) != count:
-                return script, False, "tools/list contains duplicate names"
+            names = [tool.name for tool in listed.tools]
+            if set(names) != expected or len(names) != len(expected):
+                return script, False, f"expected tools {sorted(expected)}, got {sorted(names)}"
 
             # One real tools/call, on a tool that touches no network.
-            if script == "marketplace-mcp":
-                called = await asyncio.wait_for(
-                    session.call_tool("marketplace_sources", {}),
-                    timeout=TIMEOUT_S,
-                )
-                if called.isError:
-                    return script, False, f"marketplace_sources returned an error: {called.content}"
-                payload = called.structuredContent
-                failure = validate_sources(payload)
-                if failure is not None:
-                    return script, False, failure
-                assert payload is not None
-                mounted = payload["mounted_count"]
-                detail += f", tools/call ok: {mounted} sources mounted"
+            called = await asyncio.wait_for(session.call_tool("shops", {}), timeout=TIMEOUT_S)
+            if called.isError:
+                return script, False, f"shops returned an error: {called.content}"
+            failure = validate_shops(called.structuredContent)
+            if failure is not None:
+                return script, False, failure
+            detail += f", tools/call ok: {len(EXPECTED_INSTALLED)} shops installed"
 
             return script, True, detail
     except TimeoutError:

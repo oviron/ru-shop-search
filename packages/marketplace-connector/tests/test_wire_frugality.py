@@ -22,8 +22,6 @@ def test_no_operator_selfcheck_is_registered_as_a_tool():
 
     leaked = sorted(name for name in names if name.endswith("_selfcheck"))
     assert not leaked, f"operator-only selfchecks leaked into the MCP surface: {leaked}"
-    # 32 after Taobao, Megamarket, Cian and MPStats were cut from the fork.
-    assert len(tools) == 32
 
 
 def test_every_output_schema_is_wire_frugal():

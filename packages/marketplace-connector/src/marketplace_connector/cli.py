@@ -4,14 +4,24 @@
     Run every connector's selfcheck and report per-source status. This is the
     answer to "is it broken, or is it me": a source blocked from your network
     shows as inconclusive with the reason, a drifted parser shows as drift.
+    A shop stopped after a refusal is skipped, not probed.
+
+``marketplace-mcp stops``
+    List shops stopped after a refusal and the seconds left on each stop.
+
+``marketplace-mcp resume <shop>``
+    Lift a stop by hand, e.g. after passing the captcha yourself in the browser window.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 
+from mcp_core import stopgate
 from mcp_core.logging import log_event
 from mcp_core.source_selection import canonical
 
@@ -26,6 +36,34 @@ _SELFCHECKS: list[tuple[str, str, str]] = [
     ("citilink", "citilink_connector.server", "citilink_selfcheck"),
     ("aliexpress", "aliexpress_connector.server", "aliexpress_selfcheck"),
 ]
+
+
+def _plugin_data_dirs() -> list[Path]:
+    """Каталог данных зависит от способа установки: ``-inline`` для --plugin-dir, иначе имя marketplace."""
+    env = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if env:
+        return [Path(env)]
+    return sorted(Path.home().glob(".claude/plugins/data/ru-shop-search-*"), key=lambda p: p.stat().st_mtime)
+
+
+def cmd_stops(argv: list[str]) -> int:
+    stopped = {shop: entry for data in _plugin_data_dirs() for shop, entry in stopgate.StopGate(data).status().items()}
+    if not stopped:
+        print("no shop is stopped")
+    for shop, entry in sorted(stopped.items()):
+        print(f"  {shop:<14} {entry['retry_after_s']:>5}s left  {entry['reason']}")
+    return 0
+
+
+def cmd_resume(argv: list[str]) -> int:
+    if len(argv) != 1:
+        print("usage: marketplace-mcp resume <shop>", file=sys.stderr)
+        return 2
+    shop = canonical(argv[0])
+    for data in _plugin_data_dirs():
+        stopgate.StopGate(data).clear(shop)
+    print(f"{shop}: stop lifted")
+    return 0
 
 
 def _check_detail(check: object) -> str:
@@ -118,16 +156,24 @@ def cmd_doctor(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    dirs = _plugin_data_dirs()
+    if dirs and not os.environ.get("CLAUDE_PLUGIN_DATA"):
+        stopgate._default = stopgate.StopGate(dirs[-1])
     results = []
     for name, module_path, tool_name in _SELFCHECKS:
         if only and name not in only:
+            continue
+        try:
+            stopgate.default_gate().check(name)
+        except stopgate.SourceStoppedError as exc:
+            results.append((name, "stopped", str(exc)))
             continue
         results.append(asyncio.run(_run_one_selfcheck(name, module_path, tool_name)))
 
     print("Marketplace connector health (selfcheck):")
     healthy = blocked = drifted = 0
     for name, status, detail in results:
-        marker = {"success": "ok ", "drift_detected": "DRF", "inconclusive": "blk"}.get(status, "err")
+        marker = {"success": "ok ", "drift_detected": "DRF", "inconclusive": "blk", "stopped": "stp"}.get(status, "err")
         if status == "success":
             healthy += 1
         elif status == "drift_detected":
@@ -202,9 +248,10 @@ def main(argv: list[str] | None = None) -> int:
         print(__doc__ or "marketplace-mcp CLI")
         return 0
     command, rest = args[0], args[1:]
-    if command == "doctor":
-        return cmd_doctor(rest)
-    print(f"unknown command {command!r}; expected doctor", file=sys.stderr)
+    commands = {"doctor": cmd_doctor, "stops": cmd_stops, "resume": cmd_resume}
+    if command in commands:
+        return commands[command](rest)
+    print(f"unknown command {command!r}; expected one of {', '.join(commands)}", file=sys.stderr)
     log_event("marketplace.cli.unknown", command=command)
     return 2
 

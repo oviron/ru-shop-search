@@ -51,6 +51,7 @@ from mcp_core.cache import TTLCache
 from mcp_core.dom import JS_HELPERS, title_from_tile
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     ParserDriftError,
     ToolError,
     TransportDownError,
@@ -106,7 +107,7 @@ mcp = FastMCP(
 mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="aliexpress")
 _cdp_lock = asyncio.Lock()
 
 
@@ -584,6 +585,8 @@ async def aliexpress_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("aliexpress_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"aliexpress_search failed: {exc}")))
@@ -697,6 +700,8 @@ async def aliexpress_card(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("aliexpress_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"aliexpress_card failed: {exc}")))
@@ -732,6 +737,8 @@ async def aliexpress_selfcheck(ctx: Context | None = None) -> AliSelfcheckRespon
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("aliexpress_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"aliexpress_selfcheck failed: {exc}")))

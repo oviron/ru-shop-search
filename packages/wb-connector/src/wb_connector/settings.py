@@ -37,7 +37,7 @@ class WBSettings(BaseSettings):
         description="Whole-request wall-clock budget in seconds, bounding retries.",
     )
     min_gap: float = Field(
-        default=1.5,
+        default=3.0,
         ge=0,
         description="Polite gap between WB requests in seconds (residential-IP rate limit).",
     )

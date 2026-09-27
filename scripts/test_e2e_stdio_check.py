@@ -13,12 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 import e2e_stdio_check as probe
 
 
-def source_payload():
+def shops_payload():
     return {
-        "mounted": sorted(probe.EXPECTED_MOUNTS),
-        "mounted_count": len(probe.EXPECTED_MOUNTS),
-        "skipped": {},
-        "skipped_count": 0,
+        "shops": [{"key": key, "installed": True} for key in sorted(probe.EXPECTED_INSTALLED)]
+        + [{"key": "pepper", "installed": False}],
         "server_version": probe.EXPECTED_VERSION,
     }
 
@@ -26,25 +24,22 @@ def source_payload():
 @pytest.mark.parametrize(
     "change",
     [
-        {"mounted": []},
-        {"mounted_count": 0},
-        {"mounted": [*sorted(probe.EXPECTED_MOUNTS), "wildberries"]},
-        {"skipped": {"ozon": "import failed"}},
-        {"skipped_count": 1},
+        {"shops": []},
+        {"shops": [{"key": "wildberries", "installed": True}]},
         {"server_version": "0.0.0"},
     ],
 )
-def test_sources_reject_incomplete_or_stale_state(change):
-    assert probe.validate_sources(source_payload() | change) is not None
+def test_shops_reject_incomplete_or_stale_state(change):
+    assert probe.validate_shops(shops_payload() | change) is not None
 
 
-@pytest.mark.parametrize("payload", [None, {}, [], {"mounted": [None]}])
-def test_sources_reject_missing_or_malformed_payload(payload):
-    assert probe.validate_sources(payload) is not None
+@pytest.mark.parametrize("payload", [None, {}, [], {"shops": [None]}])
+def test_shops_reject_missing_or_malformed_payload(payload):
+    assert probe.validate_shops(payload) is not None
 
 
-def test_sources_accept_complete_current_state():
-    assert probe.validate_sources(source_payload()) is None
+def test_shops_accept_complete_current_state():
+    assert probe.validate_shops(shops_payload()) is None
 
 
 @pytest.mark.parametrize("version", ["0.0.0", probe.EXPECTED_VERSION])
@@ -67,12 +62,15 @@ async def test_probe_checks_running_version(monkeypatch, version):
             return SimpleNamespace(serverInfo=SimpleNamespace(name="wb", version=version))
 
         async def list_tools(self):
-            return SimpleNamespace(tools=[SimpleNamespace(name=f"tool_{i}") for i in range(8)])
+            return SimpleNamespace(tools=[SimpleNamespace(name=name) for name in ("search", "card", "shops")])
+
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(isError=False, structuredContent=shops_payload(), content=[])
 
     monkeypatch.setattr(probe.shutil, "which", lambda _script: "fake-mcp")
     monkeypatch.setattr(probe, "stdio_client", stdio)
     monkeypatch.setattr(probe, "ClientSession", Session)
-    _, ok, detail = await probe.probe("wb-mcp", 8)
-    assert ok is (version == probe.EXPECTED_VERSION)
+    _, ok, detail = await probe.probe("marketplace-mcp", {"search", "card", "shops"})
+    assert ok is (version == probe.EXPECTED_VERSION), detail
     if not ok:
         assert "expected version" in detail

@@ -1,4 +1,4 @@
-"""Entry point for the unified marketplace MCP server.
+"""Entry point for the ru-shop-search plugin MCP server.
 
 Exposed as the ``marketplace-mcp`` console script. stdio is the default
 transport; set ``MCP_TRANSPORT=http`` for HTTP — see ``mcp_core.runtime``.
@@ -11,11 +11,9 @@ import sys
 
 
 def main() -> int:
-    """Run the server, or the doctor CLI when a subcommand is given.
+    """Run the server, or the operator CLI (doctor, stops, resume) when a subcommand is given.
 
-    ``marketplace-mcp`` with no arguments starts the MCP server; with
-    ``doctor`` it runs the operator CLI and exits. Subcommands
-    go to stdout freely — only the server path owns the JSON-RPC stream.
+    Subcommands go to stdout freely — only the server path owns the JSON-RPC stream.
     """
     if len(sys.argv) > 1:
         from marketplace_connector.cli import main as cli_main
@@ -26,7 +24,7 @@ def main() -> int:
 
     from marketplace_connector.server import mcp
 
-    return run_server(mcp, server_name="marketplace")
+    return run_server(mcp, server_name="ru-shop-search")
 
 
 if __name__ == "__main__":

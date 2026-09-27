@@ -31,7 +31,7 @@ def clear_cache():
 @pytest.fixture(autouse=True)
 def no_delay(monkeypatch):
     """Remove the politeness gap so tests do not actually wait 1.5s per call."""
-    monkeypatch.setattr(server._limiter, "min_gap_s", 0.0)
+    monkeypatch.setattr(server._limiter, "min_gap", 0.0)
 
 
 def stub_html(monkeypatch, mapping: dict[str, str]):

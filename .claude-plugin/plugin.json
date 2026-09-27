@@ -1,0 +1,14 @@
+{
+  "name": "ru-shop-search",
+  "version": "2.4.2",
+  "description": "Поиск и сравнение цен в российских магазинах: WB, Ozon, Яндекс Маркет, DNS, Ситилинк и другие, плюс оценка лотов Авито",
+  "author": { "name": "Dmitry Avdonkin" },
+  "repository": "https://github.com/oviron/ru-shop-search",
+  "license": "MIT",
+  "mcpServers": {
+    "ru-shop-search": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--directory", "${CLAUDE_PLUGIN_ROOT}", "marketplace-mcp"]
+    }
+  }
+}

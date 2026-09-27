@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from marketplace_connector import cli
+from mcp_core.stopgate import StopGate
 
 
 @pytest.fixture(autouse=True)
@@ -237,3 +238,52 @@ def test_detail_reads_model_objects_as_well_as_dicts():
         code = None
 
     assert cli._check_detail(Entry()) == "inconclusive (transport_down)"
+
+
+# ------------------------------------------------------------ stop gate ----
+
+
+@pytest.fixture
+def plugin_data(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    data = tmp_path / ".claude/plugins/data/ru-shop-search-inline"
+    data.mkdir(parents=True)
+    return data
+
+
+def test_stops_lists_what_the_server_stopped(plugin_data, capsys):
+    StopGate(plugin_data).trip("ozon", "captcha")
+
+    assert cli.main(["stops"]) == 0
+
+    out = capsys.readouterr().out
+    assert "ozon" in out and "captcha" in out
+
+
+def test_resume_lifts_a_stop_after_the_user_passed_the_captcha(plugin_data, capsys):
+    StopGate(plugin_data).trip("ozon", "captcha")
+
+    assert cli.main(["resume", "ozon"]) == 0
+
+    assert StopGate(plugin_data).status() == {}
+
+
+def test_resume_needs_a_shop(plugin_data, capsys):
+    assert cli.main(["resume"]) == 2
+
+
+def test_doctor_skips_a_stopped_source(plugin_data, monkeypatch, capsys):
+    StopGate(plugin_data).trip("avito", "403")
+    called = []
+
+    async def fake_selfcheck(name, module_path, tool_name):
+        called.append(name)
+        return name, "success", "ok"
+
+    monkeypatch.setattr(cli, "_run_one_selfcheck", fake_selfcheck)
+
+    cli.cmd_doctor(["avito", "dns"])
+
+    assert called == ["dns"]
+    assert "stopped" in capsys.readouterr().out

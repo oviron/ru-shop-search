@@ -33,7 +33,7 @@ class DetmirSettings(BaseSettings):
         description="Hard ceiling for a whole tool call, including retries.",
     )
     min_gap: float = Field(
-        default=0.8,
+        default=3.0,
         ge=0,
         description="Minimum seconds between requests. The API is tolerant, but staying polite keeps it that way.",
     )

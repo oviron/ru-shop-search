@@ -46,6 +46,7 @@ from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     NotFoundError,
     ParserDriftError,
     RateLimitedError,
@@ -165,7 +166,7 @@ _WB_REVIEW_SORT_ALIASES = {
 }
 
 _min_gap = _settings.min_gap
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="wildberries")
 
 # Bounded retry for TRANSIENT network faults only (connect/read timeout, conn
 # reset). Verified live Nov 2026: wb_search intermittently throws ConnectTimeout
@@ -845,6 +846,8 @@ async def wb_card(
         )
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
@@ -958,6 +961,8 @@ async def wb_root_info(
         )
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_root_info.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
@@ -1186,6 +1191,8 @@ async def wb_reviews(
         raise_tool_error(TransportDownError(f"wb_reviews: {message}", provider="wb"))
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_reviews.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
@@ -1406,6 +1413,8 @@ async def wb_questions(
         )
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_questions.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
@@ -1615,6 +1624,8 @@ async def wb_search(
         )
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
@@ -2264,6 +2275,8 @@ async def wb_category_products(
         )
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("wb_category_products.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))

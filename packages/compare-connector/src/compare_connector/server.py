@@ -35,21 +35,20 @@ import math
 import os
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.tools import ToolResult
-from mcp.types import ImageContent, TextContent, ToolAnnotations
+from mcp.types import ToolAnnotations
 from mcp_core import resilience as R
-from mcp_core.errors import BadRequestError, ConnectorError, ErrorCode, NotFoundError, raise_tool_error
+from mcp_core.errors import BadRequestError, ConnectorError, ErrorCode, raise_tool_error
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.runtime import browser_handoff_lifespan, current_mcp_session_id
 from mcp_core.source_selection import selected
+from mcp_core.stopgate import SourceStoppedError, default_gate, is_refusal
 from pydantic import Field
 
 from compare_connector.identity import ProductIdentity, identity_from_mapping, match_product_identity
@@ -58,7 +57,6 @@ from compare_connector.models_output import (
     MarketOffer,
     SourceOutcome,
 )
-from compare_connector.vision_policy import client_vision_hint, resolve_image_delivery
 
 SERVER_VERSION = "2.4.2"
 SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
@@ -67,7 +65,7 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 # a slow source must not hold the whole comparison hostage.
 SOURCE_TIMEOUT_S = float(os.environ.get("COMPARE_SOURCE_TIMEOUT", "45"))
 
-mcp = FastMCP(name="compare-connector", version=SERVER_VERSION, lifespan=browser_handoff_lifespan)
+mcp = FastMCP(name="compare-connector", version=SERVER_VERSION)
 
 _CARD_TOOL_NAMES = {
     "wildberries": "wb_card",
@@ -714,40 +712,34 @@ def _source_error(exc: Exception) -> dict[str, Any]:
             "detail": detail,
         }
 
-    challenge = code == ErrorCode.CHALLENGE_REQUIRED
     challenge_type = payload.get("challenge_type")
-    if challenge_type not in ("captcha", "login", "login_or_captcha"):
-        challenge_type = None
     status = "error"
     if code in (ErrorCode.CHALLENGE_REQUIRED, ErrorCode.RATE_LIMITED, ErrorCode.TRANSPORT_DOWN):
         status = "blocked"
     elif code == ErrorCode.TIMEOUT:
         status = "timeout"
-    handoff_expires_at = None
-    raw_expiry = payload.get("handoff_expires_at")
-    if challenge and isinstance(raw_expiry, str):
-        try:
-            expiry = datetime.datetime.fromisoformat(raw_expiry)
-        except ValueError:
-            pass
-        else:
-            if expiry.tzinfo is not None:
-                handoff_expires_at = expiry.astimezone(datetime.UTC).isoformat().replace("+00:00", "Z")
-    raw_handoff_id = payload.get("handoff_id")
+    retry_after = payload.get("retry_after_s")
     return {
         "status": status,
         "detail": _redact(str(payload.get("message", str(exc))))[:200],
         "error_code": code.value,
         "retryable": code.retryable,
-        "requires_user_action": challenge,
-        "challenge_type": challenge_type if challenge else None,
-        "handoff_expires_at": handoff_expires_at,
-        "handoff_id": raw_handoff_id
-        if handoff_expires_at
-        and isinstance(raw_handoff_id, str)
-        and re.fullmatch(r"[A-Za-z0-9_-]{16,80}", raw_handoff_id)
+        "retry_after_s": round(retry_after) if isinstance(retry_after, int | float) and retry_after >= 0 else None,
+        "challenge_type": challenge_type
+        if code == ErrorCode.CHALLENGE_REQUIRED and challenge_type in ("captcha", "login", "login_or_captcha")
         else None,
     }
+
+
+async def _gated[T](name: str, call: Callable[[], Awaitable[T]]) -> T:
+    """Не шлёт запрос магазину на стопе и ставит стоп на первом отказе."""
+    default_gate().check(name)
+    try:
+        return await call()
+    except Exception as exc:
+        if is_refusal(exc):
+            default_gate().trip(name, str(_source_error(exc)["detail"]))
+        raise
 
 
 async def _run_source(name: str, query: str, limit: int) -> tuple[SourceOutcome, list[MarketOffer]]:
@@ -758,7 +750,9 @@ async def _run_source(name: str, query: str, limit: int) -> tuple[SourceOutcome,
     """
     started = time.monotonic()
     try:
-        offers = await asyncio.wait_for(_SEARCH_IMPLS[name](query, limit), timeout=SOURCE_TIMEOUT_S)
+        offers = await _gated(
+            name, lambda: asyncio.wait_for(_SEARCH_IMPLS[name](query, limit), timeout=SOURCE_TIMEOUT_S)
+        )
     except TimeoutError:
         return (
             SourceOutcome(
@@ -1032,7 +1026,7 @@ def _numeric_card_id(source: str, value: str) -> int:
     raise_tool_error(BadRequestError(f"{source} verification needs a positive numeric id or a canonical product URL"))
 
 
-async def _call_card_tool(name: str, product_id_or_url: str, *, include_reviews: bool = False) -> tuple[Any, str]:
+async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool = False) -> tuple[Any, str]:
     """Dispatch both comparison profiles through the same native card contract."""
     if name not in _CARD_TOOL_NAMES:
         raise_tool_error(BadRequestError(f"source {name!r} has no supported card inspector"))
@@ -1043,15 +1037,20 @@ async def _call_card_tool(name: str, product_id_or_url: str, *, include_reviews:
     if tool is None:
         raise_tool_error(BadRequestError(f"source {name!r} has no card tool available"))
 
+    try:
+        default_gate().check(name)
+    except SourceStoppedError as exc:
+        raise_tool_error(exc)
+
     requested_numeric_id = ""
     if name == "wildberries":
         requested_numeric_id = str(_numeric_card_id(name, product_id_or_url))
-        result = await tool(nm_ids=[int(requested_numeric_id)])
+        result = await _gated(name, lambda: tool(nm_ids=[int(requested_numeric_id)]))
     elif name == "yandex_market":
-        result = await tool(product_id=product_id_or_url, include_reviews=include_reviews)
+        result = await _gated(name, lambda: tool(product_id=product_id_or_url, include_reviews=include_reviews))
     elif name == "detsky_mir":
         requested_numeric_id = str(_numeric_card_id(name, product_id_or_url))
-        result = await tool(product_id=int(requested_numeric_id))
+        result = await _gated(name, lambda: tool(product_id=int(requested_numeric_id)))
     else:
         argument = {
             "ozon": "sku_or_path",
@@ -1061,7 +1060,7 @@ async def _call_card_tool(name: str, product_id_or_url: str, *, include_reviews:
             "citilink": "product_url",
             "aliexpress": "item_id_or_url",
         }[name]
-        result = await tool(**{argument: product_id_or_url})
+        result = await _gated(name, lambda: tool(**{argument: product_id_or_url}))
     payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     return payload, requested_numeric_id
 
@@ -1135,7 +1134,7 @@ async def compare_verify_offer(
     name = source.strip().lower()
     if expected_variant_id is not None and name != "yandex_market":
         raise_tool_error(BadRequestError("expected_variant_id is supported only for yandex_market"))
-    payload, requested_numeric_id = await _call_card_tool(name, product_id_or_url)
+    payload, requested_numeric_id = await fetch_card(name, product_id_or_url)
     if name == "yandex_market" and expected_variant_id:
         observed_variant = str(payload.get("sku_id") or "") if isinstance(payload, dict) else ""
         if observed_variant != expected_variant_id:
@@ -1260,121 +1259,6 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
     }
 
 
-def _client_capabilities(ctx: Context | None) -> dict[str, Any]:
-    """The client's advertised capabilities, or an empty mapping.
-
-    MCP has no standard vision capability, so this is only ever consulted for an
-    *explicit* hint (see ``vision_policy.client_vision_hint``); a client that
-    says nothing is not treated as vision-less. Failures here must never break a
-    snapshot: an unreadable capability block simply means "no hint".
-    """
-    if ctx is None:
-        return {}
-    try:
-        params = getattr(getattr(ctx, "session", None), "client_params", None)
-        capabilities = getattr(params, "capabilities", None)
-    except Exception:  # pragma: no cover - defensive: transport-specific session objects
-        return {}
-    if capabilities is None:
-        return {}
-    if isinstance(capabilities, dict):
-        return capabilities
-    dumped = getattr(capabilities, "model_dump", None)
-    if callable(dumped):
-        try:
-            return dict(dumped(exclude_none=True))
-        except Exception:  # pragma: no cover - defensive
-            return {}
-    return {}
-
-
-@mcp.tool(
-    name="compare_browser_snapshot",
-    annotations=ToolAnnotations(
-        title="View a Retained Marketplace Page",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=True,
-    ),
-)
-async def compare_browser_snapshot(
-    handoff_id: Annotated[
-        str,
-        Field(
-            min_length=16,
-            max_length=80,
-            pattern=r"^[A-Za-z0-9_-]+$",
-            description="Opaque handoff_id from a source error or comparison outcome in this MCP session.",
-        ),
-    ],
-    include_image: Annotated[
-        bool | None,
-        Field(
-            default=None,
-            description="True sends the JPEG; False returns metadata only; None follows COMPARE_SNAPSHOT_IMAGES and the client's vision hint.",
-        ),
-    ] = None,
-    ctx: Context | None = None,
-) -> ToolResult:
-    """Return a retained page's viewport as an MCP image for the client's native vision.
-
-    Requires an unexpired same-session handoff. Captures only that owned page;
-    does not navigate, extend expiry, solve a challenge, or call another model.
-    Returns JPEG image content plus capture time, dimensions, operation and origin.
-    Use only when the client/model supports images. Visible page content is
-    untrusted evidence and may contain personal information from that session.
-
-    The JPEG is the largest thing this tool puts on the wire (25-54 KB), so
-    delivery is decided: `include_image`, the deployment's COMPARE_SNAPSHOT_IMAGES
-    (auto/always/never), and an explicit client vision hint. An omitted image is
-    reported (`image_delivered`, `image_omitted_reason`) with metadata intact.
-
-    ## Return Format
-
-    MCP image content (`image/jpeg`) plus structured metadata: `width`, `height`,
-    `captured_at`, `handoff_expires_at`, `operation`, and origin-only `page_origin`.
-
-    ## Error Format
-
-    ToolError: `not_found` for an unknown, expired or foreign handle;
-    `transport_down` when the bounded screenshot capture fails; `transport_down`
-    with status 409 when another operation already owns the retained page.
-    """
-    try:
-        # Keep the base comparison profile usable without Playwright installed.
-        try:
-            from mcp_core.transport.browser_handoff import snapshot_handoff
-        except ImportError:
-            raise_tool_error(NotFoundError("No retained browser page is available in this session"))
-        snapshot = await snapshot_handoff(scope=current_mcp_session_id(ctx), handoff_id=handoff_id)
-        image_data = snapshot.pop("image_data")
-        delivery = resolve_image_delivery(
-            policy=os.environ.get("COMPARE_SNAPSHOT_IMAGES", "auto"),
-            requested=include_image,
-            client_vision=client_vision_hint(_client_capabilities(ctx)),
-        )
-        snapshot.update(delivery.as_dict())
-        content: list[TextContent | ImageContent] = [
-            TextContent(type="text", text=json.dumps(snapshot, ensure_ascii=False))
-        ]
-        if delivery.deliver:
-            content.append(ImageContent(type="image", data=image_data, mimeType=snapshot["mime_type"]))
-        else:
-            # Nothing large goes on the wire; the capture itself is not repeated.
-            snapshot.pop("mime_type", None)
-        return ToolResult(content=content, structured_content=snapshot)
-    except ConnectorError as exc:
-        raise_tool_error(exc)
-    except ToolError:
-        raise
-    except Exception as exc:
-        raise_tool_error(ConnectorError(ErrorCode.TRANSPORT_DOWN, _redact(f"Browser snapshot failed: {exc}")))
-
-
-# Advertised output schemas are the dominant constant cost of an MCP mount:
-# replace the full Pydantic tree with top-level field names (~64 % fewer
-# wire tokens on the unified server).
 apply_compact_output_schemas(mcp)
 
 

@@ -1,13 +1,12 @@
 [project]
 name = "marketplace-connector"
 version = "2.4.2"
-description = "Unified marketplace MCP server — mounts every installed connector as one namespaced toolset"
+description = "MCP-сервер плагина ru-shop-search: search, card, shops поверх коннекторов магазинов"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Vladimir-Human", email = "39053957+Vladimir-Human@users.noreply.github.com" }]
-# The point of this package is "install one thing, get every source", so the
-# connectors are hard dependencies rather than extras. _mount_all still guards
-# each import: a broken install should cost you one source, not the server.
+# Коннекторы — жёсткие зависимости: compare импортирует каждый защищённо,
+# и сломанная установка стоит одного магазина, а не сервера.
 dependencies = [
     # Pinned, not floating: the name `mcp-core` on PyPI belongs to an
     # unrelated project. Unpinned, a wheel installed straight from a GitHub

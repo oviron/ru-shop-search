@@ -1,7 +1,7 @@
 # Architecture
 
-Nine marketplace connectors, price comparison and a unified `marketplace-mcp`, all
-over one shared runtime. This document covers how they fit together and why the
+Nine marketplace connectors, price comparison and the plugin server `marketplace-mcp`,
+all over one shared runtime. This document covers how they fit together and why the
 structure is what it is.
 
 ## Layout
@@ -20,8 +20,8 @@ ru-shop-search/
 │   ├── citilink-connector/     Citilink             → citilink-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
-│   └── marketplace-connector/  unified mount + CLI  → marketplace-mcp
-├── skills/                  agent-facing usage docs
+│   └── marketplace-connector/  plugin server + CLI  → marketplace-mcp
+├── .claude-plugin/          plugin.json (MCP server) and a local marketplace.json
 ├── scripts/                 CDP launchers, stdout guard
 ├── docs/                    this directory
 └── pyproject.toml           uv workspace root
@@ -30,8 +30,9 @@ ru-shop-search/
 Each package is independently installable and declares its own dependencies, so a
 user who only wants Wildberries never installs Playwright. `compare-connector`
 depends on the others but imports them defensively — a missing one reduces coverage
-instead of breaking startup. `marketplace-connector` mounts every installed source
-as one namespaced toolset and carries the operator CLI (`doctor`).
+instead of breaking startup. `marketplace-connector` is the plugin's MCP server: it
+exposes `search`, `card` and `shops` on top of `compare-connector` and carries the
+operator CLI (`doctor`, `stops`, `resume`).
 
 **Why a workspace rather than one package:** the connectors have genuinely
 different dependency needs (Ozon alone needs `curl_cffi` + Playwright), and users
@@ -86,6 +87,15 @@ browser), and spawning a local one would connect to the wrong profile.
 diagnostics without raising.
 
 Playwright is imported lazily, so a tier-1-only connector never pays for it.
+
+### `stopgate` — one refusal stops a shop
+
+A 401/403/429, a captcha or an anti-bot wall stops that shop for 30 minutes: the
+next request is refused locally with `rate_limited` and `source_stopped`, before
+any network traffic. Named `Pacer`s check and trip the gate per request; the
+compare fan-out does the same per tool call, so a connector that forgets to call
+`record_refusal` is still covered. The state lives in `${CLAUDE_PLUGIN_DATA}` and
+survives a server restart. `marketplace-mcp stops` / `resume <shop>` show and lift it.
 
 ### `resilience` — tolerant readers
 

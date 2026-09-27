@@ -102,7 +102,7 @@ def clear_cache():
 @pytest.fixture
 def no_delay(monkeypatch):
     """Remove the politeness gap so tests do not actually wait."""
-    monkeypatch.setattr(server._limiter, "min_gap_s", 0.0)
+    monkeypatch.setattr(server._limiter, "min_gap", 0.0)
 
 
 def stub_json(monkeypatch, mapping: dict[str, object]):

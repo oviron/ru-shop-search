@@ -39,6 +39,7 @@ from mcp_core.dom import JS_HELPERS, prices_from_tile, title_from_tile
 from mcp_core.errors import (
     BadRequestError,
     ChallengeRequiredError,
+    ConnectorError,
     NotFoundError,
     ParserDriftError,
     ToolError,
@@ -49,9 +50,7 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.runtime import browser_handoff_lifespan, current_mcp_session_id
 from mcp_core.transport import build_client
-from mcp_core.transport.browser_handoff import get_handoff_id, has_pending_handoff, read_with_handoff
 from mcp_core.transport.chrome_cdp import NavBlocked, open_page
 from pydantic import Field
 
@@ -102,7 +101,6 @@ _HEADERS = {
 
 mcp = FastMCP(
     name="lamoda-connector",
-    lifespan=browser_handoff_lifespan,
     version=SERVER_VERSION,
     instructions=(
         "Lamoda fashion catalog: text search runs in the operator's Chrome over "
@@ -114,7 +112,7 @@ mcp = FastMCP(
 mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="lamoda")
 _cdp_lock = asyncio.Lock()
 
 
@@ -335,47 +333,21 @@ async def _cdp_render_search(query: str, ctx: Context | None) -> dict[str, Any]:
     """Tier-2: render the search page in the operator's Chrome, extract tiles."""
     cache_key = f"search:{query}"
     url = f"{SITE_BASE}/catalogsearch/result/?q={urllib.parse.quote(query)}"
-    scope = current_mcp_session_id(ctx)
-    pending = has_pending_handoff(scope=scope, operation="lamoda_search", url=url)
-    cached = None if pending else _cache.get(cache_key)
+    cached = _cache.get(cache_key)
     if cached is not None:
         return cached
 
     async def _attempt() -> dict[str, Any]:
-        async def read(page):
-            raw = await asyncio.wait_for(page.evaluate(_SEARCH_EXTRACT_JS), timeout=30.0)
-            if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
-                raise_tool_error(TransportDownError("extracted page data missing or over the body cap"))
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise_tool_error(ParserDriftError("search extractor returned a non-object payload"))
-            data.pop("_handoff_expires_at", None)
-            data.pop("_handoff_id", None)
-            return data
-
         async with _cdp_lock:
             await _polite_wait()
-            if scope is None:
-                async with open_page(url, wait_ms=8000) as page:
-                    return await read(page)
-            note: dict = {}
-            data, expires_at = await read_with_handoff(
-                url=url,
-                wait_ms=8000,
-                scope=scope,
-                operation="lamoda_search",
-                read=read,
-                challenge=lambda payload: "captcha" if _anti_bot_challenge(payload) else None,
-                note_out=note,
-            )
-            if note.get("resumed"):
-                # R3: a resumed read states what changed (challenge cleared, data
-                # moved) rather than making the caller diff two payloads.
-                data["_resume"] = note
-            if expires_at:
-                data["_handoff_expires_at"] = expires_at
-                data["_handoff_id"] = get_handoff_id(scope=scope, operation="lamoda_search", url=url)
-            return data
+            async with open_page(url, wait_ms=8000) as page:
+                raw = await asyncio.wait_for(page.evaluate(_SEARCH_EXTRACT_JS), timeout=30.0)
+        if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
+            raise_tool_error(TransportDownError("extracted page data missing or over the body cap"))
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise_tool_error(ParserDriftError("search extractor returned a non-object payload"))
+        return data
 
     try:
         payload = await asyncio.wait_for(_attempt(), timeout=max(0.01, float(TIMEOUT)))
@@ -416,14 +388,8 @@ async def lamoda_search(
         except NavBlocked as exc:
             raise_tool_error(TransportDownError(f"Lamoda navigation blocked (HTTP {exc.status})."))
         if _anti_bot_challenge(payload):
-            raise_tool_error(
-                ChallengeRequiredError(
-                    "Lamoda requires user action in the connected Chrome. Complete the visible challenge, then retry.",
-                    provider="lamoda",
-                    handoff_expires_at=payload.get("_handoff_expires_at"),
-                    handoff_id=payload.get("_handoff_id"),
-                )
-            )
+            _pacer.record_refusal("captcha")
+            raise_tool_error(ChallengeRequiredError("Lamoda showed an anti-bot challenge", provider="lamoda"))
         items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
         if not items_raw:
             raise_tool_error(
@@ -441,6 +407,8 @@ async def lamoda_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("lamoda_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"lamoda_search failed: {exc}")))
@@ -502,6 +470,8 @@ async def lamoda_card(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("lamoda_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"lamoda_card failed: {exc}")))
@@ -536,6 +506,8 @@ async def lamoda_selfcheck(ctx: Context | None = None) -> LamodaSelfcheckRespons
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("lamoda_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"lamoda_selfcheck failed: {exc}")))

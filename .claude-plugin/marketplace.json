@@ -1,0 +1,16 @@
+{
+  "name": "ru-shop-search",
+  "owner": {
+    "name": "Dmitry Avdonkin"
+  },
+  "metadata": {
+    "description": "Личный маркетплейс с плагином ru-shop-search"
+  },
+  "plugins": [
+    {
+      "name": "ru-shop-search",
+      "source": "./",
+      "description": "Поиск и сравнение цен в российских магазинах"
+    }
+  ]
+}

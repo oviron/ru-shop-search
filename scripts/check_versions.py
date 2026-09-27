@@ -40,6 +40,7 @@ SERVER_VERSION = re.compile(r'^SERVER_VERSION\s*=\s*"([^"]+)"')
 # person installing a wheel from a Release, which is exactly the reader this pin
 # exists to protect, so nothing but this check will ever notice it drifting.
 CORE_PIN = re.compile(r'^\s*"mcp-core==([^"]+)",')
+PLUGIN_VERSION = re.compile(r'^\s*"version":\s*"([^"]+)"')
 
 
 class Mismatch(tuple[str, int, str, str]):
@@ -121,6 +122,7 @@ def main(argv: list[str]) -> int:
         sorted(p for p in REPO_ROOT.glob("packages/*/pyproject.toml") if p.parent.name != "mcp-core"),
         CORE_PIN,
     )
+    sweep("plugin.json", [REPO_ROOT / ".claude-plugin" / "plugin.json"], PLUGIN_VERSION)
 
     if silent:
         sys.stderr.write("files that declare no version at all:\n")

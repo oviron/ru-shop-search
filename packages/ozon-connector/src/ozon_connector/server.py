@@ -41,6 +41,7 @@ from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     ParserDriftError,
     TransportDownError,
     raise_tool_error,
@@ -126,7 +127,7 @@ _SELFCHECK_SKU = _settings.selfcheck_sku  # golden-fixture baseline SKU; OZON_SE
 
 # Polite rate limit (Ozon Cloudflare more aggressive than WB v4)
 _min_gap = _settings.min_gap
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="ozon")
 _cdp_lock = asyncio.Lock()  # serialize CDP tab creation
 
 # Caches the (status, body) of successful composer reads, keyed by canonical path.
@@ -702,6 +703,8 @@ async def ozon_card(
         return OzonCardResponse(**result)
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("ozon_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"ozon_card failed: {exc}")))
@@ -866,6 +869,8 @@ async def ozon_reviews(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("ozon_reviews.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"ozon_reviews failed: {exc}")))
@@ -1324,6 +1329,8 @@ async def ozon_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("ozon_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"ozon_search failed: {exc}")))
@@ -1471,6 +1478,8 @@ async def ozon_selfcheck(ctx: Context | None = None) -> OzonSelfcheckResponse:
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("ozon_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"ozon_selfcheck failed: {exc}")))

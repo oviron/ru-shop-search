@@ -37,6 +37,7 @@ from mcp_core.cache import TTLCache
 from mcp_core.dom import JS_HELPERS
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     ParserDriftError,
     ToolError,
     TransportDownError,
@@ -98,7 +99,7 @@ mcp = FastMCP(
 mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="dns")
 _cdp_lock = asyncio.Lock()
 
 
@@ -423,6 +424,8 @@ async def dns_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("dns_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"dns_search failed: {exc}")))
@@ -507,6 +510,8 @@ async def dns_card(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("dns_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"dns_card failed: {exc}")))
@@ -540,6 +545,8 @@ async def dns_selfcheck(ctx: Context | None = None) -> DnsSelfcheckResponse:
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("dns_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"dns_selfcheck failed: {exc}")))

@@ -47,7 +47,7 @@ def test_server_version_matches_pyproject():
 
 async def test_registered_tools_are_stable():
     names = {tool.name for tool in await server.mcp.list_tools()}
-    assert names == {"compare_prices", "compare_sources", "compare_verify_offer", "compare_browser_snapshot"}
+    assert names == {"compare_prices", "compare_sources", "compare_verify_offer"}
 
 
 async def test_compare_verify_offer_dispatches_to_source_card(monkeypatch):
@@ -227,13 +227,11 @@ async def test_a_timeout_is_reported_as_a_timeout(monkeypatch):
     assert result.complete is False
     assert result.total_offers == 1
     assert outcomes["yandex_market"].retryable is True
-    assert outcomes["yandex_market"].requires_user_action is False
 
 
 @pytest.mark.parametrize("wire_error", [False, True])
-async def test_challenge_keeps_partial_results_and_recovers_only_failed_source(monkeypatch, wire_error):
+async def test_challenge_keeps_partial_results_and_stops_only_the_failed_source(monkeypatch, wire_error):
     calls = []
-    blocked = True
 
     async def wb(query, limit):
         calls.append("wildberries")
@@ -241,12 +239,10 @@ async def test_challenge_keeps_partial_results_and_recovers_only_failed_source(m
 
     async def aliexpress(query, limit):
         calls.append("aliexpress")
-        if blocked:
-            error = ChallengeRequiredError("visible challenge " * 40, challenge_type="login_or_captcha")
-            if wire_error:
-                raise_tool_error(error)
-            raise error
-        return [offer("aliexpress", 450.0)]
+        error = ChallengeRequiredError("visible challenge " * 40, challenge_type="login_or_captcha")
+        if wire_error:
+            raise_tool_error(error)
+        raise error
 
     stub_sources(monkeypatch, {"wildberries": wb, "aliexpress": aliexpress})
     result = await server.compare_prices(query="тест")
@@ -255,18 +251,15 @@ async def test_challenge_keeps_partial_results_and_recovers_only_failed_source(m
     assert result.cheapest.source == "wildberries"
     assert outcome.status == "blocked"
     assert outcome.error_code == "challenge_required"
-    assert outcome.retryable is True
-    assert outcome.requires_user_action is True
     assert outcome.challenge_type == "login_or_captcha"
     assert len(outcome.detail) <= 200
-    assert calls.count("aliexpress") == 1  # no blind challenge retry loop
 
-    blocked = False  # a later call after browser action completed
-    resumed = await server.compare_prices(query="тест", sources=["aliexpress"])
-    assert resumed.complete is True  # only for this retry's requested sources
-    assert resumed.sources_ok == ["aliexpress"]
-    assert resumed.source_outcomes[0].requires_user_action is False
-    assert calls.count("wildberries") == 1
+    again = await server.compare_prices(query="тест")
+    stopped = next(o for o in again.source_outcomes if o.source == "aliexpress")
+    assert calls.count("aliexpress") == 1
+    assert calls.count("wildberries") == 2
+    assert stopped.status == "blocked"
+    assert stopped.retry_after_s is not None and stopped.retry_after_s > 0
 
 
 @pytest.mark.parametrize(
@@ -281,14 +274,13 @@ def test_structured_error_code_takes_precedence_over_message(error, status, code
     assert result["status"] == status
     assert result["error_code"] == code
     assert result["retryable"] is retryable
-    assert result["requires_user_action"] is False
+    assert result["retry_after_s"] is None
 
 
 @pytest.mark.parametrize("message", ["broken", "[]", "null", '{"error": []}', '{"error": "new_code"}'])
 def test_malformed_error_envelope_does_not_break_comparison(message):
     result = server._source_error(ToolError(message))
     assert result["status"] == "error"
-    assert not result.get("requires_user_action", False)
 
 
 def test_challenge_metadata_does_not_leak_credentials_or_upstream_instructions():
@@ -301,19 +293,6 @@ def test_challenge_metadata_does_not_leak_credentials_or_upstream_instructions()
     assert "secret" not in result["detail"]
     assert "private" not in result["detail"]
     assert result["challenge_type"] is None
-    assert result["requires_user_action"] is True
-
-
-@pytest.mark.parametrize("expiry", [None, [], "https://example.invalid/?token=secret", "2026-09-12T00:00:00"])
-def test_invalid_handoff_expiry_does_not_become_recovery_instructions(expiry):
-    result = server._source_error(ToolError(json.dumps({"error": "challenge_required", "handoff_expires_at": expiry})))
-    assert result["handoff_expires_at"] is None
-
-
-@pytest.mark.parametrize("handle", [None, 12345678901234567, [], "https://example.invalid/token", "short"])
-def test_invalid_handoff_id_does_not_become_a_snapshot_target(handle):
-    payload = {"error": "challenge_required", "handoff_expires_at": "2026-09-12T15:00:00Z", "handoff_id": handle}
-    assert server._source_error(ToolError(json.dumps(payload)))["handoff_id"] is None
 
 
 async def test_a_generic_failure_is_reported_as_error_not_blocked(monkeypatch):
@@ -1149,3 +1128,84 @@ def test_a_new_product_carries_no_condition_warning():
     ]
 
     assert server._relevance_warnings("iphone 15", priced) == []
+
+
+# ------------------------------------------------------------- stop gate ----
+
+
+async def test_a_refused_source_is_stopped_and_not_called_again(monkeypatch):
+    calls = {"ozon": 0}
+
+    async def refused(query, limit):
+        calls["ozon"] += 1
+        raise_tool_error(ChallengeRequiredError("captcha wall", provider="ozon"))
+
+    async def fine(query, limit):
+        return [offer("wildberries", 100.0)]
+
+    stub_sources(monkeypatch, {"ozon": refused, "wildberries": fine})
+
+    first = await server.compare_prices(query="rtx 5070")
+    second = await server.compare_prices(query="rtx 5070")
+
+    assert calls["ozon"] == 1
+    outcome = next(o for o in second.source_outcomes if o.source == "ozon")
+    assert outcome.status == "blocked"
+    assert "stopped after a refusal" in outcome.detail
+    assert [o.status for o in first.source_outcomes if o.source == "wildberries"] == ["ok"]
+    assert [o.status for o in second.source_outcomes if o.source == "wildberries"] == ["ok"]
+
+
+async def test_a_parse_failure_does_not_stop_the_source(monkeypatch):
+    calls = {"ozon": 0}
+
+    async def drifted(query, limit):
+        calls["ozon"] += 1
+        raise_tool_error(ParserDriftError("shape moved", provider="ozon"))
+
+    stub_sources(monkeypatch, {"ozon": drifted})
+
+    await server.compare_prices(query="rtx 5070")
+    await server.compare_prices(query="rtx 5070")
+
+    assert calls["ozon"] == 2
+
+
+async def test_a_card_for_a_stopped_source_sends_no_request(monkeypatch):
+    from mcp_core.stopgate import default_gate
+
+    class FakeCard:
+        called = False
+
+        async def __call__(self, **kwargs):
+            FakeCard.called = True
+
+    class FakeSource:
+        ozon_card = FakeCard()
+
+    monkeypatch.setattr(server, "SOURCES", {"ozon": FakeSource()})
+    default_gate().trip("ozon", "403")
+
+    with pytest.raises(ToolError) as caught:
+        await server.fetch_card("ozon", "123")
+
+    assert error_payload(caught.value)["source_stopped"] is True
+    assert FakeCard.called is False
+
+
+async def test_a_refused_card_stops_the_source(monkeypatch):
+    from mcp_core.stopgate import default_gate
+
+    class FakeCard:
+        async def __call__(self, **kwargs):
+            raise_tool_error(RateLimitedError("ozon"))
+
+    class FakeSource:
+        ozon_card = FakeCard()
+
+    monkeypatch.setattr(server, "SOURCES", {"ozon": FakeSource()})
+
+    with pytest.raises(ToolError):
+        await server.fetch_card("ozon", "123")
+
+    assert "ozon" in default_gate().status()

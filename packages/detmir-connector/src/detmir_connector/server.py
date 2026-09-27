@@ -55,8 +55,9 @@ from mcp_core.errors import (
 )
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
+from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport import DEFAULT_USER_AGENT, RateLimiter, build_client, get_text_with_retries, proxy_from_env
+from mcp_core.transport import DEFAULT_USER_AGENT, build_client, get_text_with_retries, proxy_from_env
 from pydantic import Field
 
 from detmir_connector.models_output import (
@@ -98,7 +99,7 @@ _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")
 mcp = FastMCP(name="detmir-connector", version=SERVER_VERSION)
 mcp.add_middleware(RetryMiddleware(max_retries=2, base_delay=1.0))
 
-_limiter = RateLimiter(min_gap_s=_settings.min_gap)
+_limiter = Pacer(_settings.min_gap, source="detsky_mir")
 _cache: TTLCache[Any] = TTLCache(ttl_s=_settings.cache_ttl, max_entries=256)
 
 

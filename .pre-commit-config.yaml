@@ -53,5 +53,5 @@ repos:
         name: one version, everywhere
         entry: python scripts/check_versions.py
         language: system
-        files: (pyproject\.toml|__init__\.py|server\.py)$
+        files: (pyproject\.toml|__init__\.py|server\.py|plugin\.json)$
         pass_filenames: false

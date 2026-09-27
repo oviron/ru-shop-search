@@ -35,7 +35,7 @@ class OzonSettings(BaseSettings):
 
     timeout: float = Field(default=20.0, gt=0)
     max_body_bytes: int = Field(default=_DEFAULT_MAX_BODY_BYTES, gt=0)
-    min_gap: float = Field(default=2.5, ge=0)
+    min_gap: float = Field(default=3.0, ge=0)
     impersonate: str = Field(default="chrome", min_length=1)
     selfcheck_sku: str = Field(default="3015796642", min_length=1)
     cache_ttl: float = Field(

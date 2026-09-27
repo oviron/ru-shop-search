@@ -89,20 +89,11 @@ class SourceOutcome(BaseModel):
     offers_returned: int = Field(default=0, description="How many offers this marketplace contributed.")
     elapsed_ms: int = Field(default=0, description="Round-trip time for this marketplace, in milliseconds.")
     error_code: str | None = Field(default=None, description="Structured connector error code, if known.")
-    retryable: bool = Field(
-        default=False, description="Retry may succeed; user action must be completed first if required."
-    )
-    requires_user_action: bool = Field(
-        default=False, description="Pause retries for this source until browser action completes."
+    retryable: bool = Field(default=False, description="A later retry may succeed; see retry_after_s.")
+    retry_after_s: int | None = Field(
+        default=None, description="Seconds until a stopped source accepts requests again, when known."
     )
     challenge_type: str | None = Field(default=None, description="captcha, login, or login_or_captcha when known.")
-    handoff_expires_at: str | None = Field(
-        default=None,
-        description="UTC expiry when the challenged tab is retained; repeat the same request after action.",
-    )
-    handoff_id: str | None = Field(
-        default=None, description="Opaque same-session handle for an optional browser snapshot."
-    )
 
 
 class CompareResponse(BaseModel):

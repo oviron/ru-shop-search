@@ -30,7 +30,7 @@ class YandexSettings(BaseSettings):
         description="Per-request timeout in seconds. Pages are 2-2.5 MB, so this is well above the other connectors'.",
     )
     min_gap: float = Field(
-        default=1.5,
+        default=3.0,
         ge=0,
         description="Minimum seconds between requests. Yandex tolerates a steady pace; bursts invite SmartCaptcha.",
     )

@@ -99,31 +99,31 @@ def test_the_snapshot_projection_is_deterministic():
 def test_a_renamed_tool_is_reported():
     snapshot = json.loads(FIXTURE.read_text(encoding="utf-8"))
     mutated = copy.deepcopy(snapshot)
-    mutated["wb_search_renamed"] = mutated.pop("wb_search")
+    mutated["search_renamed"] = mutated.pop("search")
 
     diffs = _contract_diff(mutated, _live_contract())
 
-    assert any("wb_search" in diff for diff in diffs)
+    assert any("search" in diff for diff in diffs)
 
 
 def test_a_retyped_argument_is_reported():
     snapshot = json.loads(FIXTURE.read_text(encoding="utf-8"))
     mutated = copy.deepcopy(snapshot)
-    mutated["wb_card"]["parameters"]["properties"]["nm_ids"]["type"] = "string"
+    mutated["search"]["parameters"]["properties"]["per_shop"]["type"] = "string"
 
     diffs = _contract_diff(mutated, _live_contract())
 
-    assert any(diff.startswith("tool changed: wb_card") for diff in diffs)
+    assert any(diff.startswith("tool changed: search") for diff in diffs)
 
 
 def test_a_removed_response_field_is_reported():
     snapshot = json.loads(FIXTURE.read_text(encoding="utf-8"))
     mutated = copy.deepcopy(snapshot)
-    mutated["avito_card"]["output"]["properties"].pop("price_rub")
+    mutated["search"]["output"]["properties"].pop("cheapest")
 
     diffs = _contract_diff(mutated, _live_contract())
 
-    assert any(diff.startswith("tool changed: avito_card") for diff in diffs)
+    assert any(diff.startswith("tool changed: search") for diff in diffs)
 
 
 def test_prose_is_not_part_of_the_contract():
@@ -134,18 +134,10 @@ def test_prose_is_not_part_of_the_contract():
 
 
 def test_fields_named_like_prose_keys_are_still_pinned():
-    """Regression: a response field called ``title`` or ``description`` is a
-    domain field, not wording. The strip must be positional — keying off the
-    schema container — or the most visible field of a product card silently
-    disappears from the snapshot and can be renamed without the test firing."""
-    live = _live_contract()
+    """Поле ответа с именем title — это данные, а не формулировка: strip позиционный."""
+    schema = {"properties": {"title": {"type": "string", "description": "wording"}}}
 
-    assert "title" in live["avito_card"]["output"]["properties"]
-    assert "description" in live["avito_card"]["output"]["properties"]
-
-    mutated = copy.deepcopy(live)
-    mutated["avito_card"]["output"]["properties"].pop("title")
-    assert any(diff.startswith("tool changed: avito_card") for diff in _contract_diff(live, mutated))
+    assert _strip_prose(schema) == {"properties": {"title": {"type": "string"}}}
 
 
 if __name__ == "__main__":

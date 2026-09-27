@@ -29,6 +29,8 @@ import random as _random
 import time
 from collections.abc import Awaitable, Callable
 
+from mcp_core.stopgate import StopGate, default_gate
+
 __all__ = ["Pacer"]
 
 
@@ -51,6 +53,8 @@ class Pacer:
         random: Callable[[], float] | None = None,
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        source: str | None = None,
+        gate: StopGate | None = None,
     ) -> None:
         """Configure the pace for one source.
 
@@ -70,6 +74,8 @@ class Pacer:
         drawn factor is ``1 + jitter * random()``, so the delay is never shorter
         than ``error_delay``; ``random=lambda: 0.0`` reproduces the un-jittered
         value exactly, which is what the tests pin.
+
+        With ``source`` set, the first refusal stops that source through the stop gate.
         """
         self.min_gap = max(0.0, float(min_gap))
         self.error_delay = max(self.min_gap, float(error_delay)) if error_delay is not None else self.min_gap * 2
@@ -82,6 +88,11 @@ class Pacer:
         self._last_request_at = 0.0
         self._consecutive_refusals = 0
         self._penalised = False
+        self.source = source
+        self._gate = gate
+
+    def _stop_gate(self) -> StopGate:
+        return self._gate if self._gate is not None else default_gate()
 
     async def wait(self, min_gap: float | None = None) -> None:
         """Block until enough time has passed since the previous request.
@@ -90,6 +101,8 @@ class Pacer:
         their module-level value so an operator (or a test) can retune the pace
         at runtime without rebuilding the pacer.
         """
+        if self.source is not None:
+            self._stop_gate().check(self.source)
         gap = self.min_gap if min_gap is None else max(0.0, float(min_gap))
         if self._penalised:
             gap = max(gap, self.error_delay) * (1.0 + self.jitter * self._random())
@@ -97,6 +110,8 @@ class Pacer:
             elapsed = self._clock() - self._last_request_at
             if elapsed < gap:
                 await self._sleep(gap - elapsed)
+                if self.source is not None:
+                    self._stop_gate().check(self.source)
             self._last_request_at = self._clock()
             self._penalised = False
 
@@ -105,7 +120,7 @@ class Pacer:
         self._consecutive_refusals = 0
         self._penalised = False
 
-    def record_refusal(self) -> None:
+    def record_refusal(self, reason: str = "refused") -> None:
         """A request was refused — a 401, 403, 429, or an anti-bot wall.
 
         Only count what the marketplace actively refused. A parse failure or a
@@ -114,6 +129,8 @@ class Pacer:
         """
         self._consecutive_refusals += 1
         self._penalised = True
+        if self.source is not None:
+            self._stop_gate().trip(self.source, reason)
 
     @property
     def consecutive_refusals(self) -> int:

@@ -48,6 +48,7 @@ from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.errors import (
     BadRequestError,
+    ConnectorError,
     NotFoundError,
     ParserDriftError,
     ToolError,
@@ -114,7 +115,7 @@ mcp = FastMCP(
 mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=256)
-_pacer = Pacer(_min_gap)
+_pacer = Pacer(_min_gap, source="avito")
 _cdp_lock = asyncio.Lock()
 
 
@@ -495,6 +496,8 @@ async def avito_search(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_search.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"avito_search failed: {exc}")))
@@ -588,6 +591,8 @@ async def avito_card(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"avito_card failed: {exc}")))
@@ -655,6 +660,8 @@ async def avito_seller(
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_seller.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"avito_seller failed: {exc}")))
@@ -690,6 +697,8 @@ async def avito_selfcheck(ctx: Context | None = None) -> AvitoSelfcheckResponse:
         return result
     except ToolError:
         raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
     except Exception as exc:
         log_event("avito_selfcheck.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"avito_selfcheck failed: {exc}")))

@@ -118,7 +118,7 @@ async def get_text_with_retries(
     max_bytes: int,
     retries: int = 2,
     backoff_s: float = 0.6,
-    limiter: RateLimiter | None = None,
+    limiter: PoliteGate | None = None,
     headers: dict[str, str] | None = None,
     error_body_max_bytes: int | None = 64_000,
     retry_statuses: frozenset[int] | None = RETRYABLE_STATUSES,
