@@ -15,6 +15,12 @@ class DnsSearchItemOut(BaseModel):
     title: str | None = Field(default=None, description="Product title.")
     price_rub: float | None = Field(default=None, description="Price in rubles; None when absent — never 0.")
     old_price_rub: float | None = Field(default=None, description="Strikethrough price in rubles.")
+    availability: str | None = Field(
+        default=None, description="Stock label on the tile, e.g. «В наличии», «При заказе»."
+    )
+    in_stock: bool | None = Field(
+        default=None, description="True for «В наличии», False for an explicit absence, None otherwise."
+    )
     url: str | None = Field(default=None, description="Canonical product URL.")
 
 
@@ -24,6 +30,7 @@ class DnsSearchResponse(BaseModel):
     status: str = Field(default="success", description="Response status: success or error.")
     query: str = Field(default="", description="Search query text.")
     tier_used: str | None = Field(default=None, description="Fetch tier used (cdp).")
+    city: str | None = Field(default=None, description="City DNS priced the page for (chosen by the site from the IP).")
     count: int = Field(default=0, description="Number of items returned.")
     items: list[DnsSearchItemOut] = Field(default_factory=list, description="Search result items.")
     meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")
@@ -38,6 +45,7 @@ class DnsCardResponse(BaseModel):
     price_rub: float | None = Field(default=None, description="Price in rubles; None when absent — never 0.")
     old_price_rub: float | None = Field(default=None, description="Strikethrough price in rubles.")
     is_available: bool | None = Field(default=None, description="Whether the product is sellable now.")
+    city: str | None = Field(default=None, description="City DNS priced the page for (chosen by the site from the IP).")
     url: str = Field(default="", description="Canonical product URL.")
     tier_used: str = Field(default="", description="Fetch tier used (cdp).")
     meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")

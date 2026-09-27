@@ -610,7 +610,7 @@ async def _search_dns(query: str, limit: int) -> list[MarketOffer]:
                 price_rub=item.price_rub,
                 rating=None,
                 rating_count=None,
-                in_stock=None,
+                in_stock=item.in_stock,
                 url=item.url or "",
             )
         )

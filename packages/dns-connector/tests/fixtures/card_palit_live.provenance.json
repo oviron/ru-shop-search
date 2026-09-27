@@ -1,0 +1,15 @@
+{
+  "url": "https://www.dns-shop.ru/product/b58aaa7e00a9d582/",
+  "captured_at": "2026-09-27",
+  "sha256": "fad512655f0778dfb934b75050ef9aa580e7c2c62eb718055c297054f50b90ac",
+  "method": "captured live on 2026-09-27 19:16:55 in the plugin's anonymous Chrome tab (200 in 0.7 s after the search had passed Qrator); rendered DOM trimmed to the city label, h1, the .product-buy container and the availability wrap; city and its GUID redacted as in the search capture",
+  "ground_truth": {
+    "title": "Видеокарта Palit GeForce RTX 5070 Infinity 3 [NE75070019K9-GB2050S]",
+    "price_rub": 90299,
+    "old_price_rub": null,
+    "is_available": true,
+    "traps": {
+      "instalment_line": "от 8 803 ₽/ мес."
+    }
+  }
+}

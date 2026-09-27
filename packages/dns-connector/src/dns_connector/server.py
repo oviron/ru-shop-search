@@ -47,6 +47,7 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
+from mcp_core.stopgate import SourceStoppedError
 from mcp_core.transport.chrome_cdp import NavBlocked, open_page
 from pydantic import Field
 
@@ -97,6 +98,11 @@ mcp = FastMCP(
     ),
 )
 mcp.add_middleware(RetryMiddleware())
+
+_REFUSAL_STATUSES = frozenset({401, 403, 429})
+# Qrator's 401 reloads itself into 200 in ~2 s (live, 2026-09-27).
+_CHALLENGE_GRACE_S = 12.0
+_PRICE_WAIT_MS = 8000
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
 _pacer = Pacer(_min_gap, source="dns")
@@ -260,7 +266,8 @@ _SEARCH_EXTRACT_TEMPLATE = """
         });
         if (out.length >= 48) break;
     }
-    return JSON.stringify({items: out, title: document.title || ''});
+    const city = cleanText(document.querySelector('[class^="city-select__text"]'));
+    return JSON.stringify({items: out, title: document.title || '', city: city});
 }
 """
 
@@ -309,6 +316,7 @@ _CARD_EXTRACT_TEMPLATE = """
         old_price_text: oldPriceText,
         availability_text: availText,
         is_available: available,
+        city: cleanText(document.querySelector('[class^="city-select__text"]')),
         page_title: document.title || ''
     });
 }
@@ -336,25 +344,31 @@ def _search_item_from_tile(tile: dict[str, Any]) -> DnsSearchItemOut:
     # report the pair only when it is internally consistent.
     if price is not None and old_price is not None and old_price <= price:
         old_price = None
+    availability = R.flatten_text(tile.get("availability_text"))
     return DnsSearchItemOut(
         product_id=tile.get("product_id"),
         title=R.flatten_text(tile.get("title")),
         price_rub=price,
         old_price_rub=old_price,
+        availability=availability,
+        in_stock=_in_stock(availability),
         url=tile.get("url"),
     )
 
 
-async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | None) -> dict[str, Any]:
-    """Open ``url`` in the operator's Chrome, let Qrator pass, extract.
+_ABSENT_RE = re.compile(r"нет в наличии|закончил|нет на складе|снят с продажи", re.IGNORECASE)
 
-    The first navigation pays the proof-of-work (wait_ms is generous for that
-    reason); later reads on the same session are fast. Serialized via _cdp_lock.
-    """
-    async with _cdp_lock:
-        await _polite_wait()
-        async with open_page(url, wait_ms=wait_ms) as page:
-            raw = await asyncio.wait_for(page.evaluate(extract_js), timeout=30.0)
+
+def _in_stock(label: str | None) -> bool | None:
+    """«При заказе» means DNS brings it in later: not explicitly in stock, so unknown."""
+    if not label:
+        return None
+    if _ABSENT_RE.search(label):
+        return False
+    return True if re.match(r"\s*в наличии", label, re.IGNORECASE) else None
+
+
+def _parse_extract(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
         raise ToolError(TransportDownError("extracted page data missing or over the body cap"))
     data = json.loads(raw)
@@ -363,9 +377,56 @@ async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | No
     return data
 
 
+def _has_prices(data: dict[str, Any]) -> bool:
+    items = data.get("items")
+    if isinstance(items, list):
+        return any(isinstance(it, dict) and it.get("price_text") for it in items)
+    return bool(data.get("price_text"))
+
+
+def _blocked(status: int) -> TransportDownError:
+    return TransportDownError(
+        f"DNS refused the browser tab (HTTP {status}); DNS is stopped for 30 min, do not retry. "
+        "If the profile window shows a check, it may be passed by hand, then `marketplace-mcp resume dns`.",
+        status_code=status,
+    )
+
+
+async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | None) -> dict[str, Any]:
+    """Open ``url`` in the plugin's Chrome, let Qrator pass, extract once prices show.
+
+    Qrator answers a tab without its cookie with 401 and a script that reloads the
+    page into 200 by itself; ``open_page`` waits for that. A 401/403/429 that stays
+    stops DNS. ``wait_ms`` caps how long to wait for prices to render.
+    """
+    async with _cdp_lock:
+        try:
+            await _polite_wait()
+        except SourceStoppedError as exc:
+            raise_tool_error(exc)
+        try:
+            async with open_page(url, wait_ms=0, challenge_grace_s=_CHALLENGE_GRACE_S) as page:
+                deadline = asyncio.get_running_loop().time() + wait_ms / 1000
+                while True:
+                    data = _parse_extract(await asyncio.wait_for(page.evaluate(extract_js), timeout=30.0))
+                    if _has_prices(data) or asyncio.get_running_loop().time() >= deadline:
+                        break
+                    await asyncio.sleep(0.5)
+        except NavBlocked as exc:
+            if exc.status in _REFUSAL_STATUSES:
+                _pacer.record_refusal(f"http {exc.status}")
+                raise_tool_error(_blocked(exc.status))
+            raise_tool_error(TransportDownError(f"DNS page failed (HTTP {exc.status})", status_code=exc.status))
+    if _is_qrator_wall(data):
+        _pacer.record_refusal("access-restricted page")
+        raise_tool_error(_blocked(403))
+    _pacer.record_success()
+    return data
+
+
 def _is_qrator_wall(data: dict[str, Any]) -> bool:
-    title = str(data.get("title") or data.get("page_title") or "")
-    return "доступ ограничен" in title.lower() or "qrator" in title.lower() or not title.strip()
+    title = str(data.get("title") or data.get("page_title") or "").lower()
+    return not _has_prices(data) and ("доступ ограничен" in title or "qrator" in title)
 
 
 @mcp.tool(
@@ -397,14 +458,7 @@ async def dns_search(
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=8000, ctx=ctx)
-            except NavBlocked as exc:
-                raise_tool_error(
-                    TransportDownError(
-                        f"DNS navigation blocked (HTTP {exc.status}). The Qrator challenge must pass in the scraping-profile Chrome — open dns-shop.ru there once, then retry."
-                    )
-                )
+            payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=_PRICE_WAIT_MS, ctx=ctx)
             tier = "cdp"
             _cache.set(url, payload)
         items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
@@ -418,7 +472,9 @@ async def dns_search(
         warnings: list[str] = []
         if items and all(it.price_rub is None for it in items):
             warnings.append("no_prices_on_page")
-        result = DnsSearchResponse(query=query, tier_used=tier, count=len(items), items=items)
+        result = DnsSearchResponse(
+            query=query, tier_used=tier, city=R.flatten_text(payload.get("city")), count=len(items), items=items
+        )
         attached = R.attach_meta(result.model_dump(by_alias=True, exclude={"meta"}), warnings, source="dns_search")
         result.meta = MetaOut(**attached["_meta"])
         return result
@@ -479,10 +535,7 @@ async def dns_card(
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_render(url, _CARD_EXTRACT_JS, wait_ms=8000, ctx=ctx)
-            except NavBlocked as exc:
-                raise_tool_error(TransportDownError(f"DNS navigation blocked (HTTP {exc.status})."))
+            payload = await _cdp_render(url, _CARD_EXTRACT_JS, wait_ms=_PRICE_WAIT_MS, ctx=ctx)
             tier = "cdp"
             _cache.set(url, payload)
         title = R.flatten_text(payload.get("title"))
@@ -502,6 +555,7 @@ async def dns_card(
             price_rub=price,
             old_price_rub=old_price,
             is_available=payload.get("is_available"),
+            city=R.flatten_text(payload.get("city")),
             url=url,
             tier_used=tier,
         )
@@ -558,7 +612,7 @@ async def _dns_selfcheck_impl(ctx: Context | None) -> DnsSelfcheckResponse:
     url = f"{SEARCH_URL}?q={urllib.parse.quote('ноутбук')}"
     try:
         async with asyncio.timeout(90):
-            payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=8000, ctx=ctx)
+            payload = await _cdp_render(url, _SEARCH_EXTRACT_JS, wait_ms=_PRICE_WAIT_MS, ctx=ctx)
     except TimeoutError:
         checks["search"] = R.selfcheck_entry(
             "inconclusive", baseline=baseline, reason="timeout", notes=["render exceeded 90s"]

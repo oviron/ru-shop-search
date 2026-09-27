@@ -338,6 +338,14 @@ script does not set it.
 natively in a real Chrome, so the `dns-connector` renders the page and reads the
 DOM rather than touching the CSRF-gated ajax routes.
 
+> Проверено 2026-09-27 с домашнего IP, анонимный профиль плагина, без логина: поиск во
+> вкладке получил 401 Qrator, через 1,9 с страница сама перезагрузилась в 200, плитки с
+> ценами и наличием появились ещё через ~1 с. Следующие страницы и повторный запуск
+> Chrome через полчаса отдали 200 сразу. Коннектор ждёт такой переход до 12 с
+> (`challenge_grace_s`) и цены ещё до 8 с. 401/403/429, которые не ушли в 200, и
+> страница «Доступ ограничен» останавливают DNS на 30 минут; 5xx — обычный сбой без
+> стопа. Город цен сайт выбирает сам по IP, ответ несёт его в поле `city`.
+
 Getting there took two separate fixes, and the first one only looked like a win.
 The product-id regex demanded 24 hex while the real id is 16
 (`/product/b7a1667f9b19ed20/`), so search had been parsing zero tiles; fixing it
@@ -355,8 +363,8 @@ smallest number on the tile. Had the tile resolution been correct from the start
 DNS would have reported the monthly payment as the price — green, plausible, and
 wrong. Prefer the null.
 
-Then a burst of back-to-back requests degrades DNS to `transport_down`, which is
-Qrator rate-limiting the rendered browser, not a parser fault. The DOM route is
+Then a burst of back-to-back requests gets the rendered browser rate-limited by
+Qrator, not a parser fault; the plugin now treats that refusal as a stop. The DOM route is
 the only route: no public JSON API exists, and every open-source DNS
 implementation drives a real browser through Selenium, undetected-chromedriver or
 Puppeteer — the same thing this connector does. Pace the calls and run

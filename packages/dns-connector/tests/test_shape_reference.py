@@ -7,6 +7,8 @@ sorted set of paths and types the extractor emits — via
 disappear or retype silently: the shape changes and this test names the exact
 paths that drifted.
 
+Each golden is the union over every capture, since a type may vary with the
+data (``old_price_text`` str or null, ``city`` absent on the older capture).
 The goldens live in ``dns_connector.shape_reference`` — the same registry
 ``dns_selfcheck`` compares live payloads against — and this file asserts the
 registry still agrees with the fixtures, so it cannot go stale silently.
@@ -33,19 +35,33 @@ def _extract(js_source: str, fixture: Path, page_url: str) -> dict:
         pytest.skip(str(exc))
 
 
-def test_search_payload_shape_matches_the_capture() -> None:
-    payload = _extract(
+def _union_shape(js_source: str, captures: list[tuple[str, str]]) -> list[str]:
+    paths: set[str] = set()
+    for name, page_url in captures:
+        paths.update(shape_signature(_extract(js_source, FIXTURES / name, page_url=page_url)))
+    return sorted(paths)
+
+
+def test_search_payload_shape_matches_the_captures() -> None:
+    shape = _union_shape(
         server._SEARCH_EXTRACT_JS,
-        FIXTURES / "search_grid.html",
-        page_url="https://www.dns-shop.ru/search/?q=%D0%BD%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA",
+        [
+            ("search_grid.html", "https://www.dns-shop.ru/search/?q=%D0%BD%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA"),
+            (
+                "search_videokarty_live.html",
+                "https://www.dns-shop.ru/catalog/17a89aab16404e77/videokarty/?q=rtx+5070&stock=no",
+            ),
+        ],
     )
-    assert shape_signature(payload) == list(shape_reference.SEARCH_SHAPE_REFERENCE)
+    assert shape == list(shape_reference.SEARCH_SHAPE_REFERENCE)
 
 
-def test_card_payload_shape_matches_the_capture() -> None:
-    payload = _extract(
+def test_card_payload_shape_matches_the_captures() -> None:
+    shape = _union_shape(
         server._CARD_EXTRACT_JS,
-        FIXTURES / "card.html",
-        page_url="https://www.dns-shop.ru/product/b7a1667f9b19ed20/noutbuk-huawei/",
+        [
+            ("card.html", "https://www.dns-shop.ru/product/b7a1667f9b19ed20/noutbuk-huawei/"),
+            ("card_palit_live.html", "https://www.dns-shop.ru/product/b58aaa7e00a9d582/"),
+        ],
     )
-    assert shape_signature(payload) == list(shape_reference.CARD_SHAPE_REFERENCE)
+    assert shape == list(shape_reference.CARD_SHAPE_REFERENCE)

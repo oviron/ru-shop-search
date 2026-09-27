@@ -7,9 +7,14 @@ Qrator-passed page.
 
 from __future__ import annotations
 
+import contextlib
+import json
+
 import pytest
 from dns_connector import server
 from fastmcp.exceptions import ToolError
+from mcp_core.pacing import Pacer
+from mcp_core.transport.chrome_cdp import NavBlocked
 
 SEARCH_EXTRACTED = {
     "title": "ноутбук — DNS",
@@ -295,3 +300,109 @@ def test_the_dom_extractor_and_the_python_parser_agree():
     """
     assert "[A-Za-z0-9_-]+" in server._SEARCH_EXTRACT_JS, "the search extractor JS no longer uses the shared id charset"
     assert server._ID_CHARS == "[A-Za-z0-9_-]", "the Python id charset moved; update the JS to match"
+
+
+# ------------------------------------------------------------ refusals and stop ----
+
+
+class _Tab:
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+
+    async def evaluate(self, js):
+        return json.dumps(self.payloads.pop(0) if len(self.payloads) > 1 else self.payloads[0])
+
+
+def _patch_tab(monkeypatch, *, blocked: int | None = None, payloads=(SEARCH_EXTRACTED,)):
+    calls = {"n": 0, "grace": None}
+
+    @contextlib.asynccontextmanager
+    async def fake_open_page(url, wait_ms, challenge_grace_s=0.0):
+        calls["n"] += 1
+        calls["grace"] = challenge_grace_s
+        if blocked is not None:
+            raise NavBlocked(blocked, url)
+        yield _Tab(payloads)
+
+    monkeypatch.setattr(server, "open_page", fake_open_page)
+    monkeypatch.setattr(server, "_min_gap", 0.0)
+    monkeypatch.setattr(server, "_pacer", Pacer(0.0, source="dns"))
+    monkeypatch.setattr(server, "_PRICE_WAIT_MS", 0)
+    return calls
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+async def test_a_refusal_that_outlasts_the_grace_stops_dns(monkeypatch, status):
+    calls = _patch_tab(monkeypatch, blocked=status)
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.dns_search("rtx 5070")
+    assert "DNS is stopped" in str(excinfo.value)
+    assert calls["grace"] > 0, "Qrator's self-reloading 401 needs the grace"
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.dns_search("rtx 5070 ti")
+    assert json.loads(str(excinfo.value))["source_stopped"] is True
+    assert calls["n"] == 1, "a stopped DNS must not open another tab"
+
+
+async def test_a_server_error_does_not_stop_dns(monkeypatch):
+    calls = _patch_tab(monkeypatch, blocked=502)
+
+    for _ in range(2):
+        with pytest.raises(ToolError):
+            await server.dns_search("rtx 5070")
+    assert calls["n"] == 2
+
+
+async def test_an_access_restricted_page_is_a_refusal(monkeypatch):
+    calls = _patch_tab(monkeypatch, payloads=[{"title": "Доступ ограничен", "items": []}])
+
+    with pytest.raises(ToolError) as excinfo:
+        await server.dns_search("rtx 5070")
+    assert "DNS is stopped" in str(excinfo.value)
+    with pytest.raises(ToolError):
+        await server.dns_search("rtx 5070 ti")
+    assert calls["n"] == 1
+
+
+async def test_render_waits_for_prices_then_returns(monkeypatch):
+    unpriced = {"title": "t", "items": [{**SEARCH_EXTRACTED["items"][0], "price_text": None}]}
+    _patch_tab(monkeypatch, payloads=[unpriced, unpriced, SEARCH_EXTRACTED])
+    monkeypatch.setattr(server.asyncio, "sleep", _no_sleep)
+
+    data = await server._cdp_render("https://www.dns-shop.ru/search/?q=x", "js", wait_ms=8000, ctx=None)
+
+    assert data["items"][0]["price_text"] == "52 999 ₽"
+
+
+async def _no_sleep(_s):
+    return None
+
+
+# ------------------------------------------------------------- stock and city ----
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("В наличии", True),
+        ("В наличии в 122 магазинах", True),
+        ("При заказе", None),
+        ("Нет в наличии", False),
+        ("Товар закончился", False),
+        (None, None),
+    ],
+)
+def test_stock_label_maps_to_in_stock(label, expected):
+    item = server._search_item_from_tile({"product_id": "b58aaa7e00a9d582", "availability_text": label})
+    assert item.in_stock is expected
+    assert item.availability == label
+
+
+async def test_search_reports_the_city_the_page_was_priced_for(monkeypatch):
+    _patch_render(monkeypatch, {**SEARCH_EXTRACTED, "city": "Новосибирск"})
+
+    result = await server.dns_search("ноутбук")
+
+    assert result.city == "Новосибирск"

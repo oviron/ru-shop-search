@@ -82,8 +82,8 @@ outright, and it is why those sources need no stored credentials. Setup:
 CDP всегда на `127.0.0.1`, меняется только порт (`CHROME_CDP_PORT`, по умолчанию
 `9222`). Профиль лежит в `${CLAUDE_PLUGIN_DATA}/chrome-profile` (`mcp_core.plugin_data`),
 сервер поднимает его сам при первой навигации. `open_page` открывает только хосты из
-`SHOP_DOMAINS`, а `challenge_grace_s` пропускает 403-страницу антибота, которую
-вкладка сама перезагружает в 200 (Ozon). `start_browser()`/`close_browser()` стоят
+`SHOP_DOMAINS`, а `challenge_grace_s` пропускает 401/403-страницу антибота, которую
+вкладка сама перезагружает в 200 (403 у Ozon, 401 Qrator у DNS). `start_browser()`/`close_browser()` стоят
 за командой `marketplace-mcp browser`, `probe_session()` проверяет сессию для
 `doctor`, не поднимая исключений.
 

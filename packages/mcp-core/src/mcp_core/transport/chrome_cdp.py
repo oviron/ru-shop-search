@@ -484,8 +484,8 @@ _NAV_STATUS_JS = "() => performance.getEntriesByType('navigation')[0]?.responseS
 
 
 async def _challenge_cleared(page: PageLike, status: int | None, grace_s: float) -> bool:
-    """Ждёт, пока антибот-страница с 403 сама перезагрузится в 200; сами мы ничего не шлём."""
-    if status != 403 or grace_s <= 0:
+    """Ждёт, пока страница антибота (403 у Ozon, 401 у Qrator) сама перезагрузится в 200; мы ничего не шлём."""
+    if status not in (401, 403) or grace_s <= 0:
         return False
     deadline = time.monotonic() + grace_s
     while time.monotonic() < deadline:
@@ -889,7 +889,7 @@ async def open_page(
       * non-http(s) schemes are refused outright (scheme guard);
       * a block/auth/5xx main document raises ``NavBlocked`` rather than
         yielding a page that only looks like content; with ``challenge_grace_s``
-        a 403 antibot page that reloads itself into a 200 within that time passes;
+        a 401/403 antibot page that reloads itself into a 200 within that time passes;
       * tab creation, navigation and teardown are individually bounded, so a
         wedged CDP session cannot hang a tool call indefinitely;
       * when Playwright cannot finish its attach handshake (Chrome >= 151),

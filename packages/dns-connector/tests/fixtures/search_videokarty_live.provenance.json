@@ -1,0 +1,9 @@
+{
+  "url": "https://www.dns-shop.ru/catalog/17a89aab16404e77/videokarty/?q=rtx+5070&stock=no",
+  "captured_at": "2026-09-27",
+  "sha256": "8540b52c6632ca8796fc890b456a6607d89c713ff69ee835530bf4ca0d5f899b",
+  "method": "captured live on 2026-09-27 19:16 in the plugin's anonymous Chrome tab (search «rtx 5070», Qrator's 401 reloaded itself into 200 in 1.9 s); rendered DOM trimmed with jsdom to the city label and the first four product tiles; the city the site picked from the IP and its GUID are redacted («Город по IP», zero GUID, /shops/city/)",
+  "ground_truth": {
+    "note": "24 tiles on the page, 23 «В наличии», 1 «При заказе»; kept: Palit RTX 5070 Infinity 3 90 299 ₽, GIGABYTE WINDFORCE OC SFF 89 299 ₽, MSI VENTUS 3X OC 90 299 ₽ (all «В наличии»), Palit RTX 5070 Ti GamingPro 150 999 ₽ «При заказе»; no strikethrough prices; every tile carries the «от … ₽/ мес.» instalment decoy"
+  }
+}

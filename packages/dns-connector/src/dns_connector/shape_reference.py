@@ -1,6 +1,6 @@
 """Reference shape signatures for the DNS extractors.
 
-Generated from the captured fixtures (see ``tests/fixtures/*.provenance.json``)
+Generated from all captured fixtures (the union of their signatures) (see ``tests/fixtures/*.provenance.json``)
 by running the real extractor over the capture and fingerprinting the payload
 with ``mcp_core.resilience.shape_signature``. Two consumers:
 
@@ -17,6 +17,8 @@ captured page and replacing the fingerprint.
 from __future__ import annotations
 
 SEARCH_SHAPE_REFERENCE: tuple[str, ...] = (
+    "city:null",
+    "city:str",
     "items[].availability_text:str",
     "items[].old_price_text:null",
     "items[].old_price_text:str",
@@ -29,6 +31,8 @@ SEARCH_SHAPE_REFERENCE: tuple[str, ...] = (
 
 CARD_SHAPE_REFERENCE: tuple[str, ...] = (
     "availability_text:str",
+    "city:null",
+    "city:str",
     "is_available:bool",
     "old_price_text:null",
     "page_title:str",

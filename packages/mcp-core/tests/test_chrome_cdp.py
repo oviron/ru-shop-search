@@ -321,12 +321,13 @@ def instant_sleep(monkeypatch):
     monkeypatch.setattr(chrome_cdp.asyncio, "sleep", lambda _s: real_sleep(0))
 
 
-def test_a_403_challenge_that_reloads_into_200_passes(instant_sleep):
+@pytest.mark.parametrize("status", [403, 401])
+def test_a_challenge_that_reloads_into_200_passes(instant_sleep, status):
     import asyncio
 
-    page = _StatusPage(403, RuntimeError("context destroyed"), 200)
+    page = _StatusPage(status, RuntimeError("context destroyed"), 200)
 
-    assert asyncio.run(chrome_cdp._challenge_cleared(page, 403, grace_s=5)) is True
+    assert asyncio.run(chrome_cdp._challenge_cleared(page, status, grace_s=5)) is True
 
 
 def test_a_403_that_stays_403_is_a_refusal_after_the_grace(instant_sleep, monkeypatch):
@@ -338,7 +339,7 @@ def test_a_403_that_stays_403_is_a_refusal_after_the_grace(instant_sleep, monkey
     assert asyncio.run(chrome_cdp._challenge_cleared(_StatusPage(403), 403, grace_s=5)) is False
 
 
-@pytest.mark.parametrize(("status", "grace"), [(429, 5.0), (401, 5.0), (403, 0.0)])
+@pytest.mark.parametrize(("status", "grace"), [(429, 5.0), (401, 0.0), (403, 0.0)])
 def test_no_grace_for_other_refusals_or_when_not_asked(status, grace):
     import asyncio
 
