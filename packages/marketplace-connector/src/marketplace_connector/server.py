@@ -38,7 +38,9 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempoten
 class Shop(BaseModel):
     key: str = Field(description="Имя магазина для параметра shops.")
     title: str = Field(description="Название магазина.")
-    transport: str = Field(description="http, http+browser-token или browser.")
+    transport: str = Field(
+        description="http, http+browser-token, http+browser (поиск по HTTP, карточка во вкладке) или browser."
+    )
     text_search: bool = Field(description="Есть ли текстовый поиск.")
     installed: bool = Field(description="Коннектор подключён в этом сервере.")
     stopped: dict[str, Any] | None = Field(
@@ -57,7 +59,7 @@ _SHOPS: tuple[tuple[str, str, str], ...] = (
     ("yandex_market", "Яндекс Маркет", "http"),
     ("dns", "DNS", "browser"),
     ("citilink", "Ситилинк", "browser"),
-    ("mvideo", "М.Видео", "http"),
+    ("mvideo", "М.Видео", "http+browser"),
     ("detsky_mir", "Детский мир", "http"),
     ("lamoda", "Лэмода", "http"),
     ("vseinstrumenti", "ВсеИнструменты", "http"),

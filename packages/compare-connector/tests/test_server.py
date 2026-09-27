@@ -192,6 +192,32 @@ async def test_citilink_search_rows_become_offers(monkeypatch):
     ]
 
 
+async def test_mvideo_search_rows_become_offers(monkeypatch):
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from mcp_core.transport import impersonated
+    from mcp_core.transport.impersonated import Reply
+    from mvideo_connector import server as mvideo
+
+    fixture = Path(__file__).parents[2] / "mvideo-connector/tests/fixtures/search_rtx5070_live.json"
+
+    async def fake_post(url, body, **kwargs):
+        return Reply(200, fixture.read_text(encoding="utf-8"), None)
+
+    monkeypatch.setattr(impersonated, "impersonated_post", fake_post)
+    monkeypatch.setattr(mvideo, "_pacer", Pacer(0.0, source="mvideo", gate=StopGate(None)))
+    mvideo._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"mvideo": mvideo})
+
+    offers = await server._search_mvideo("rtx 5070", 12)
+
+    assert [(o.product_id, o.price_rub, o.seller, o.rating_count, o.in_stock) for o in offers[:2]] == [
+        ("400678996", 84999.0, "М.Видео", 1, True),
+        ("400535386", 126350.0, "М.Видео", 28, True),
+    ]
+    assert [(o.product_id, o.seller) for o in offers if o.seller != "М.Видео"] == [("402590260", "")]
+
+
 # ----------------------------------------------------------------- ranking ----
 
 

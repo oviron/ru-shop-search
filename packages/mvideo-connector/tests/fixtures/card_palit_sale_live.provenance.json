@@ -1,0 +1,14 @@
+{
+  "url": "https://www.mvideo.ru/products/400535386",
+  "captured_at": "2026-09-27",
+  "sha256": "50ed10b50c239cc4909158c5c42ef2cb16765d3567e4234fd48a2deb371c4891",
+  "method": "captured live on 2026-09-27 20:25:33 in the plugin's anonymous Chrome tab (document 200); rebuilt the same way as card_palit_live.html",
+  "ground_truth": {
+    "price_rub": 126350,
+    "old_price_rub": 132999,
+    "is_available": true,
+    "rating": 5.0,
+    "review_count": 28,
+    "brand": "Palit"
+  }
+}

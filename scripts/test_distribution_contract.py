@@ -46,11 +46,13 @@ def test_all_comparison_sources_have_a_wheelhouse_dependency() -> None:
     package_for_source = {
         "wildberries": "wb-connector",
         "yandex_market": "yandex-connector",
+        "detsky_mir": "detmir-connector",
         "ozon": "ozon-connector",
         "avito": "avito-connector",
         "lamoda": "lamoda-connector",
         "dns": "dns-connector",
         "citilink": "citilink-connector",
+        "mvideo": "mvideo-connector",
         "aliexpress": "aliexpress-connector",
     }
     metadata = tomllib.loads((ROOT / "packages" / "compare-connector" / "pyproject.toml").read_text(encoding="utf-8"))[

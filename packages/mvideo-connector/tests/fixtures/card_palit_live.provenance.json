@@ -1,0 +1,14 @@
+{
+  "url": "https://www.mvideo.ru/products/400678996",
+  "captured_at": "2026-09-27",
+  "sha256": "b6165ebd008b2e0b0b129a4ae173a986fd79f9a6456e5526cb6392a20f83bad3",
+  "method": "captured live on 2026-09-27 20:24:47 in the plugin's anonymous Chrome tab (document 200, /bff/pdp/info 200 at +0.5 s); rebuilt as a minimal page: the original <title>, the schema.org ld+json without its review list (buyers' names), and the rendered mvid-price-info-block with Angular attributes, tracking attributes and inline styles removed",
+  "ground_truth": {
+    "price_rub": 84999,
+    "old_price_rub": null,
+    "is_available": true,
+    "rating": 5.0,
+    "review_count": 1,
+    "brand": "Palit"
+  }
+}

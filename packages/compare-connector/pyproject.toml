@@ -26,6 +26,7 @@ avito = ["avito-connector"]
 lamoda = ["lamoda-connector"]
 dns = ["dns-connector"]
 citilink = ["citilink-connector"]
+mvideo = ["mvideo-connector"]
 aliexpress = ["aliexpress-connector"]
 all = [
     "ozon-connector",
@@ -33,6 +34,7 @@ all = [
     "lamoda-connector",
     "dns-connector",
     "citilink-connector",
+    "mvideo-connector",
     "aliexpress-connector",
 ]
 
@@ -56,3 +58,4 @@ avito-connector = { workspace = true }
 lamoda-connector = { workspace = true }
 dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
+mvideo-connector = { workspace = true }

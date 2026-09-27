@@ -34,6 +34,7 @@ EXPECTED_INSTALLED = {
     "lamoda",
     "dns",
     "citilink",
+    "mvideo",
     "aliexpress",
 }
 

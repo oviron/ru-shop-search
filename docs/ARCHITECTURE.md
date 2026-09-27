@@ -18,6 +18,7 @@ ru-shop-search/
 │   ├── lamoda-connector/       Lamoda               → lamoda-mcp
 │   ├── dns-connector/          DNS-Shop             → dns-mcp
 │   ├── citilink-connector/     Citilink             → citilink-mcp
+│   ├── mvideo-connector/       M.Video              → mvideo-mcp
 │   ├── aliexpress-connector/   AliExpress           → aliexpress-mcp
 │   ├── compare-connector/      cross-marketplace    → compare-mcp
 │   └── marketplace-connector/  plugin server + CLI  → marketplace-mcp

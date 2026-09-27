@@ -1,0 +1,379 @@
+{
+ "success": true,
+ "messages": [],
+ "body": {
+  "items": [
+   {
+    "name": "Видеокарта Palit NVIDIA GeForce RTX 5070 INFINITY 3 OC 12GB [ne75070s19k9-gb2050s]",
+    "brandName": "Palit",
+    "images": [
+     "product-medias/photos/400678996/79f7746b-ee52-4a6a-82a8-16a2ce97c56b.jpg"
+    ],
+    "productId": "400678996",
+    "slug": "/products/400678996",
+    "price": {
+     "salePrice": 84999
+    },
+    "bonusAmount": 5100,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 1,
+     "star": 5
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   },
+   {
+    "name": "Видеокарта Palit GeForce RTX 5070 INFINITY 3 OC 12GB (NE75070S19K9-GB2050S)",
+    "brandName": "Palit",
+    "images": [
+     "product-medias/photos/400535386/4095d7e0-72cf-47a3-b6ab-1a2600c71053.jpg"
+    ],
+    "productId": "400535386",
+    "slug": "/products/400535386",
+    "price": {
+     "salePrice": 126350,
+     "basePrice": 132999,
+     "discount": 4
+    },
+    "bonusAmount": 7581,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 28,
+     "star": 5
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   },
+   {
+    "name": "Видеокарта Palit GEFORCE RTX 5070 INFINITY 3 12 GB GDDR7 (NE75070019K9-GB2050S)",
+    "brandName": "Palit",
+    "images": [
+     "product-medias/photos/401420937/b60e0e12-5b98-4a28-9893-ea7f571415c8.jpg"
+    ],
+    "productId": "401420937",
+    "slug": "/products/401420937",
+    "price": {
+     "salePrice": 103000,
+     "basePrice": 126355,
+     "discount": 18
+    },
+    "bonusAmount": 6180,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-10-01"
+   },
+   {
+    "name": "Видеокарта ASUS DUAL-RTX5070-O12G",
+    "brandName": "ASUS",
+    "images": [
+     "product-medias/photos/400489896/0f910c4d-1cfd-4090-ba24-ac09579c20e7.jpg"
+    ],
+    "productId": "400489896",
+    "slug": "/products/400489896",
+    "price": {
+     "salePrice": 101650,
+     "basePrice": 106999,
+     "discount": 4
+    },
+    "bonusAmount": 6099,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-30"
+   },
+   {
+    "name": "Видеокарта Palit GeForce RTX 5070 INFINITY 3 12GB (NE75070019K9-GB2050S)",
+    "brandName": "Palit",
+    "images": [
+     "product-medias/photos/400535385/4f056ec2-a829-40c4-84ad-fc90c25c47b3.jpg"
+    ],
+    "productId": "400535385",
+    "slug": "/products/400535385",
+    "price": {
+     "salePrice": 126350,
+     "basePrice": 132999,
+     "discount": 4
+    },
+    "bonusAmount": 7581,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 46,
+     "star": 5
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-29"
+   },
+   {
+    "name": "Видеокарта Asus GeForce RTX 5070 Ti ROG STRIX OC 16GB",
+    "brandName": "ASUS",
+    "images": [
+     "product-medias/photos/400630487/a109520b-becd-444d-a5dd-cca3c7e2dd3b.jpg"
+    ],
+    "productId": "400630487",
+    "slug": "/products/400630487",
+    "price": {
+     "salePrice": 285000,
+     "basePrice": 555555,
+     "discount": 48
+    },
+    "bonusAmount": 17100,
+    "badge": {
+     "title": "Осенний ценопад",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 17,
+     "star": 4.8
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-10-01"
+   },
+   {
+    "name": "Видеокарта MSI GeForce RTX 5070 Ti 16G GAMING TRIO OC",
+    "brandName": "MSI",
+    "images": [
+     "product-medias/photos/400662965/39e43037-c239-4a4c-94ef-d82fab51f1c3.jpg"
+    ],
+    "productId": "400662965",
+    "slug": "/products/400662965",
+    "price": {
+     "salePrice": 198550,
+     "basePrice": 208999,
+     "discount": 4
+    },
+    "bonusAmount": 11913,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-10-01"
+   },
+   {
+    "name": "Видеокарта MSI GeForce RTX 5070 12G GAMING TRIO OC",
+    "brandName": "MSI",
+    "images": [
+     "product-medias/photos/400662288/601e0946-7261-4e2f-b76a-dc7cd50195e8.jpg"
+    ],
+    "productId": "400662288",
+    "slug": "/products/400662288",
+    "price": {
+     "salePrice": 133000,
+     "basePrice": 139999,
+     "discount": 4
+    },
+    "bonusAmount": 7980,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 28,
+     "star": 4.9
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   },
+   {
+    "name": "Видеокарта MSI RTX 5070 12G VENTUS 3X OC",
+    "brandName": "MSI",
+    "images": [
+     "product-medias/photos/400675086/9017978a-7687-4d34-80e6-21c5f266e199.jpg"
+    ],
+    "productId": "400675086",
+    "slug": "/products/400675086",
+    "price": {
+     "salePrice": 121591,
+     "basePrice": 127990,
+     "discount": 4
+    },
+    "bonusAmount": 7295,
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   },
+   {
+    "name": "Видеокарта Palit GeForce RTX 5070 12GB GAMINGPRO-S (NE75070019K9-GB2050U)",
+    "brandName": "Palit",
+    "images": [
+     "product-medias/photos/400630282/56b66969-2f01-42c6-8b0e-96a8fb3d7733.jpg"
+    ],
+    "productId": "400630282",
+    "slug": "/products/400630282",
+    "price": {
+     "salePrice": 151050,
+     "basePrice": 158999,
+     "discount": 4
+    },
+    "bonusAmount": 9063,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 25,
+     "star": 5
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   },
+   {
+    "name": "(МП)GA GIGABYTE GeForce RTX 5070 GAMING",
+    "brandName": "GIGABYTE",
+    "images": [
+     "product-medias/photos/402590260/3ca30c5b-deb4-4ee1-8ecc-a1811cfe0ceb.jpg"
+    ],
+    "productId": "402590260",
+    "slug": "/products/402590260",
+    "price": {
+     "salePrice": 139999
+    },
+    "bonusAmount": 8400,
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-29"
+   },
+   {
+    "name": "Видеокарта INNO3D GeForce RTX 5070 TWIN X2 12GB",
+    "brandName": "INNO3D",
+    "images": [
+     "product-medias/photos/401261726/66f4aa96-d85a-4954-808e-584064ec500b.jpg"
+    ],
+    "productId": "401261726",
+    "slug": "/products/401261726",
+    "price": {
+     "salePrice": 93765,
+     "basePrice": 98699,
+     "discount": 4
+    },
+    "bonusAmount": 5626,
+    "badge": {
+     "title": "+1500 бонусов",
+     "bgColor": "#000",
+     "textColor": "#fff",
+     "borderColor": "#000"
+    },
+    "isNew": false,
+    "isOriginal": null,
+    "isPreorder": false,
+    "rating": {
+     "count": 0,
+     "star": 0
+    },
+    "status": "available",
+    "soldOut": false,
+    "isLastChance": false,
+    "availabilityDate": "2026-09-28"
+   }
+  ],
+  "total": 12,
+  "cursorId": "",
+  "title": "rtx 5070"
+ }
+}

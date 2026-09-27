@@ -1,0 +1,19 @@
+{
+  "url": "https://www.mvideo.ru/bff/products",
+  "captured_at": "2026-09-27",
+  "sha256": "e844bb6bab404710d87e088679ade560587698ead657ce7baab5808c59f328fc",
+  "method": "captured live on 2026-09-27 19:34:00 over curl_cffi (impersonate=chrome) as POST {\"limit\":60,\"cursorId\":\"\",\"enrich\":true,\"filters\":[],\"sortBy\":\"popularity\",\"sortDirection\":\"desc\",\"isGettingBonusRoubles\":true,\"query\":\"rtx 5070\"} with the Moscow city cookies, 200; body.filters and body.queryId dropped, each row keeps only its first image; rows otherwise verbatim",
+  "ground_truth": {
+    "total": 12,
+    "first_row": {
+      "productId": "400678996",
+      "salePrice": 84999,
+      "basePrice": null,
+      "rating": {
+        "count": 1,
+        "star": 5
+      }
+    },
+    "marketplace_row": "402590260"
+  }
+}

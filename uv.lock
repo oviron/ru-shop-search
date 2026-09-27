@@ -20,6 +20,7 @@ members = [
     "lamoda-connector",
     "marketplace-connector",
     "mcp-core",
+    "mvideo-connector",
     "ozon-connector",
     "ru-shop-search",
     "wb-connector",
@@ -377,6 +378,7 @@ all = [
     { name = "citilink-connector" },
     { name = "dns-connector" },
     { name = "lamoda-connector" },
+    { name = "mvideo-connector" },
     { name = "ozon-connector" },
 ]
 avito = [
@@ -390,6 +392,9 @@ dns = [
 ]
 lamoda = [
     { name = "lamoda-connector" },
+]
+mvideo = [
+    { name = "mvideo-connector" },
 ]
 ozon = [
     { name = "ozon-connector" },
@@ -410,6 +415,8 @@ requires-dist = [
     { name = "lamoda-connector", marker = "extra == 'all'", editable = "packages/lamoda-connector" },
     { name = "lamoda-connector", marker = "extra == 'lamoda'", editable = "packages/lamoda-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "mvideo-connector", marker = "extra == 'all'", editable = "packages/mvideo-connector" },
+    { name = "mvideo-connector", marker = "extra == 'mvideo'", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", marker = "extra == 'all'", editable = "packages/ozon-connector" },
     { name = "ozon-connector", marker = "extra == 'ozon'", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
@@ -417,7 +424,7 @@ requires-dist = [
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "aliexpress", "all"]
 
 [[package]]
 name = "coverage"
@@ -1204,6 +1211,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "lamoda-connector" },
     { name = "mcp-core" },
+    { name = "mvideo-connector" },
     { name = "ozon-connector" },
     { name = "pydantic" },
     { name = "wb-connector" },
@@ -1221,6 +1229,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.6,<4" },
     { name = "lamoda-connector", editable = "packages/lamoda-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "wb-connector", editable = "packages/wb-connector" },
@@ -1300,6 +1309,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/3d/1087453384dbde46a8c7f9356eead2c58be8a7bf156bca40243377c85715/more_itertools-11.1.0-py3-none-any.whl", hash = "sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192", size = 72226, upload-time = "2026-05-22T14:14:28.824Z" },
+]
+
+[[package]]
+name = "mvideo-connector"
+version = "2.4.2"
+source = { editable = "packages/mvideo-connector" }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "playwright" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "playwright", specifier = ">=1.40" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
 ]
 
 [[package]]
@@ -1986,6 +2018,7 @@ dependencies = [
     { name = "lamoda-connector" },
     { name = "marketplace-connector" },
     { name = "mcp-core" },
+    { name = "mvideo-connector" },
     { name = "ozon-connector" },
     { name = "wb-connector" },
     { name = "yandex-connector" },
@@ -2014,6 +2047,7 @@ requires-dist = [
     { name = "lamoda-connector", editable = "packages/lamoda-connector" },
     { name = "marketplace-connector", editable = "packages/marketplace-connector" },
     { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },

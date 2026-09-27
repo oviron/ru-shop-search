@@ -32,6 +32,7 @@ KNOWN_SOURCES = frozenset(
         "lamoda",
         "dns",
         "citilink",
+        "mvideo",
         "aliexpress",
         "compare",
     }

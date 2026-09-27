@@ -37,6 +37,7 @@ _SELFCHECKS: list[tuple[str, str, str]] = [
     ("lamoda", "lamoda_connector.server", "lamoda_selfcheck"),
     ("dns", "dns_connector.server", "dns_selfcheck"),
     ("citilink", "citilink_connector.server", "citilink_selfcheck"),
+    ("mvideo", "mvideo_connector.server", "mvideo_selfcheck"),
     ("aliexpress", "aliexpress_connector.server", "aliexpress_selfcheck"),
 ]
 

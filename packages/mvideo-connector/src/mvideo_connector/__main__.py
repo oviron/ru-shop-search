@@ -1,0 +1,23 @@
+"""Entry point for the M.Video MCP server.
+
+Exposed as the ``mvideo-mcp`` console script. stdio is the default transport;
+set ``MCP_TRANSPORT=http`` for HTTP — see ``mcp_core.runtime``. Diagnostics go to
+stderr; nothing here may write to stdout.
+"""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    """Run the server on the transport selected by the environment (stdio default)."""
+    from mcp_core.runtime import run_server
+
+    from mvideo_connector.server import mcp
+
+    return run_server(mcp, server_name="mvideo")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
