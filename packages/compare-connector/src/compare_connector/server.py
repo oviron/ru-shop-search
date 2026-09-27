@@ -1472,9 +1472,9 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "picks by IP; app promo codes and bonuses are never price, a card opens by its URL"
             ),
             "aliexpress": (
-                "reachable only through the operator's Chrome (x5sec); a challenged session "
-                "surfaces as a transport error, and coupon prices are reported as warnings, "
-                "never ranked as plain rubles"
+                "search and cards render in the plugin's Chrome tab, a card opens from a search tab; "
+                "the x5sec check stops the shop, goods that do not name the query are dropped, "
+                "coupon prices are never the price"
             ),
         },
         "source_timeout_s": SOURCE_TIMEOUT_S,

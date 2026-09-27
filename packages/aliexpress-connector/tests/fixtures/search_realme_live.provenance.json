@@ -1,0 +1,12 @@
+{
+  "url": "https://aliexpress.ru/wholesale?SearchText=realme%20watch",
+  "captured_at": "2026-09-27",
+  "method": "rendered live on 2026-09-27 22:18:33 in the plugin's anonymous Chrome profile (no login), home IP; document.documentElement.outerHTML after the tile count settled. Trimmed stand-in: the <title>, the main feed (SnowSearchProductFeed_List) and the «Подобрали для вас» block (SnowSearchRecommendations wrapper). Removed: scripts, svg, pictures and images, style/srcset/src/alt/data-*/tracking attributes; item hrefs keep only sku_id.",
+  "ground_truth": {
+    "feed_tiles": "17, all naming realme watch",
+    "1005010003103368": "Realme Watch 5 смарт-часы: 3 049 ₽ now, 7 064 ₽ crossed out, 4.7, 2578 купили",
+    "1005012078314868": "realme Watch S5 умные часы: 5 781 ₽, 5 348 ₽ only with a coupon",
+    "1005006996441269": "Часы Realme Watch 5: 3 749 ₽ now, 8 131 ₽ crossed out; its delivery line is longer than the name"
+  },
+  "sha256": "a5296e665171f726e5e5b510970915d3ff11584a438a99fdbae02b32f4ab35d3"
+}

@@ -1,35 +1,8 @@
-"""AliExpress MCP connector.
+"""AliExpress MCP connector: search and cards rendered in the plugin's Chrome profile.
 
-AliExpress gates its site behind x5sec, Alibaba's JS risk control. Measured
-2026-08-20 from a Russian residential IP (docs/ANTI_BOT.md, section AliExpress):
-
-  - anonymous HTTP, item page — 200 with a ``punish?x5secdata=`` challenge
-    page («Пройдите проверку»), even with full browser headers;
-  - anonymous HTTP, search/category — 200 but an empty SPA shell: the
-    ``__AER_DATA__`` payload carries no catalog data, tiles are client-rendered;
-  - anonymous HTTP, h5api item route — ``FAIL_SYS_API_NOT_FOUNDED``;
-  - anonymous HTTP, feedback.aliexpress.ru reviews — 500.
-
-Inside a real Chrome that has passed the challenge the picture flips:
-
-  - the search page renders fully (77-96 tiles with prices) and never
-    challenges;
-  - a DIRECT ``goto`` to an item page is challenged even in a warm profile;
-  - the page itself, however, can ``fetch`` an item URL in-page without a
-    challenge (cookies ride along) — but the SSR shell carries no price;
-  - ``window.open(itemUrl)`` from the loaded search page opens the real,
-    JS-rendered card without a challenge: prices, rating and order stats are
-    in the live DOM.
-
-So every read takes the two-hop route: land on the search page, extract tiles
-directly for search; for a card, ask the landing page to open the item in a
-new tab and read that tab's rendered DOM. A direct navigation to item pages is
-structurally absent from this connector.
-
-The CDP route needs verification from the operator's machine: the selectors
-below were written against a live grid captured 2026-08-20, and only a
-challenge-passed session can confirm them. Run aliexpress_selfcheck from your
-Chrome first — its verdict tells you which case you are in.
+Anonymous HTTP gets the x5sec check or an empty SPA shell, and a direct navigation to
+an item page is checked even in a warm profile, so a card opens with ``window.open``
+from a loaded search tab (measured 2026-09-27, docs/ANTI_BOT.md).
 
 NEVER write to stdout in a stdio MCP server — it corrupts JSON-RPC.
 """
@@ -41,16 +14,16 @@ import datetime
 import json
 import re
 import urllib.parse
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn
 
 from fastmcp import Context, FastMCP
-from fastmcp.server.middleware.error_handling import RetryMiddleware
 from mcp.types import ToolAnnotations
 from mcp_core import resilience as R
 from mcp_core.cache import TTLCache
 from mcp_core.dom import JS_HELPERS, title_from_tile
 from mcp_core.errors import (
     BadRequestError,
+    ChallengeRequiredError,
     ConnectorError,
     ParserDriftError,
     ToolError,
@@ -61,7 +34,7 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
-from mcp_core.transport.chrome_cdp import NavBlocked, open_page
+from mcp_core.transport.chrome_cdp import NavBlocked, NavigationPolicyError, open_page
 from pydantic import Field
 
 from aliexpress_connector.models_output import (
@@ -80,31 +53,32 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 
 SITE_BASE = "https://aliexpress.ru"
 SEARCH_URL = f"{SITE_BASE}/wholesale"
-# The landing page any card read starts from. It is a live search the site keeps
-# cache-friendly; measured clean across headless and two real-Chrome profiles.
+# A card opens from a loaded search tab; this search is the landing for it.
 _LANDING = f"{SEARCH_URL}?SearchText={urllib.parse.quote('часы')}"
 
 TIMEOUT = _settings.timeout
 MAX_BODY_BYTES = _settings.max_body_bytes
 _min_gap = _settings.min_gap
+MAX_TILES = 48
+_RENDER_WAIT_S = 15.0
+_POLL_S = 1.0
+_REFUSAL_STATUSES = frozenset({401, 403, 418, 429})
 
-# Item ids on aliexpress.ru are 9-16 digit strings (1005...); accept a bare id
-# or an aliexpress.ru item URL. The 9-digit floor keeps short garbage out of the
-# URL we rebuild and hand to the operator's Chrome.
+# The 9-digit floor keeps short garbage out of the URL we rebuild for the profile's Chrome.
 _ITEM_ID_RE = re.compile(r"/item/(\d{9,})(?:\.html)?")
 _BARE_ID_RE = re.compile(r"\d{9,}")
+_BARE_PRICE_RE = re.compile(r"[\d\s\u00a0\u2009\u202f.,]+(?:₽|руб\.?)?")
 
 mcp = FastMCP(
     name="aliexpress-connector",
     version=SERVER_VERSION,
     instructions=(
-        "AliExpress catalog: search and product cards, read inside the operator's "
-        "own Chrome over CDP — x5sec blocks anonymous access. Start with "
-        "aliexpress_search; aliexpress_card takes an item id or aliexpress.ru item URL. "
+        "AliExpress catalog: search and product cards, rendered in the plugin's own Chrome "
+        "profile — x5sec blocks anonymous access. Start with aliexpress_search; "
+        "aliexpress_card takes an item id or aliexpress.ru item URL. "
         "Review TEXTS are not exposed: only the rating and order counts are read."
     ),
 )
-mcp.add_middleware(RetryMiddleware())
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
 _pacer = Pacer(_min_gap, source="aliexpress")
@@ -112,20 +86,15 @@ _cdp_lock = asyncio.Lock()
 
 
 async def _polite_wait() -> None:
-    """Space this source's requests out, and back off if it refused us.
-
-    Reads ``_min_gap`` at call time so an operator or a test can retune the
-    pace without rebuilding the pacer.
-    """
+    """Space this source's requests out; raises SourceStoppedError while AliExpress is stopped."""
     await _pacer.wait(min_gap=_min_gap)
 
 
 def _extract_item_id(raw: str) -> str | None:
     """Pull the item id out of an aliexpress.ru URL or a bare numeric id.
 
-    Host-checked on purpose. Only the id survives this function and the card
-    URL is rebuilt from SITE_BASE, so a caller cannot steer the operator's
-    logged-in Chrome somewhere else through the argument.
+    Host-checked: only the id survives and the card URL is rebuilt from SITE_BASE,
+    so the argument cannot steer the profile's Chrome elsewhere.
     """
     raw = raw.strip()
     if not raw:
@@ -146,40 +115,74 @@ def _extract_item_id(raw: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _item_url(item_id: str, sku_id: str | None = None) -> str:
+    url = f"{SITE_BASE}/item/{item_id}.html"
+    return f"{url}?sku_id={sku_id}" if sku_id and sku_id.isdigit() else url
+
+
 def _is_punish(payload: dict[str, Any]) -> bool:
-    """The x5sec challenge page is a transport verdict, not data."""
+    """The x5sec challenge page is a refusal, not data."""
     return bool(payload.get("punish")) or bool(payload.get("url") and "punish" in str(payload["url"]))
 
 
-def _challenge_error(detail: str = "") -> TransportDownError:
+def _challenge_error(detail: str = "") -> ChallengeRequiredError:
     message = (
-        "AliExpress challenged the session (x5sec). Open aliexpress.ru in the "
-        "scraping-profile Chrome, pass the check by hand, then retry; the "
-        "connector never solves captchas itself."
+        "AliExpress showed its x5sec challenge; AliExpress is stopped for 30 min, do not retry. "
+        "If the profile window shows the check, it may be passed by hand, then "
+        "`marketplace-mcp resume aliexpress`."
     )
-    hint = _pacer.rotation_hint()
-    if hint:
-        message += f" {hint}"
     if detail:
         message += f" Detail: {detail[:160]}"
-    return TransportDownError(message, status_code=403)
+    return ChallengeRequiredError(message, provider="aliexpress", challenge_type="x5sec", status_code=403)
 
 
-# --------------------------------------------------------------- search JS ----
-#
-# The tile root comes from the shared tileRootFor (the DNS lesson: closest()
-# tests the element itself first, so an image link masquerades as the tile and
-# every tile reads as empty). Prices come from priceTextsIn: on the measured
-# grid it returns {attached: ['6 967 ₽', '2 939 ₽'], other: ['2 334 купили']}
-# — base price first, current second, the no-glyph orders line in `other`.
-# Nothing here does arithmetic; coerce_price on the Python side decides.
+def _refuse(reason: str, error: ConnectorError) -> NoReturn:
+    _pacer.record_refusal(reason)
+    raise_tool_error(error)
+
+
+def _nav_failed(exc: NavBlocked) -> NoReturn:
+    if exc.status in _REFUSAL_STATUSES:
+        _refuse(
+            f"http {exc.status}",
+            TransportDownError(
+                f"AliExpress refused the browser tab (HTTP {exc.status}); AliExpress is stopped for 30 min, "
+                "do not retry. If the profile window shows a check, it may be passed by hand, then "
+                "`marketplace-mcp resume aliexpress`.",
+                provider="aliexpress",
+                status_code=exc.status,
+            ),
+        )
+    raise_tool_error(
+        TransportDownError(f"AliExpress page failed (HTTP {exc.status})", provider="aliexpress", status_code=exc.status)
+    )
+
+
+def _left_site() -> NoReturn:
+    _refuse("redirect off aliexpress.ru", _challenge_error("the tab was sent off aliexpress.ru (login or check page)"))
+
+
+# Shared helpers: tileRootFor tests the element itself first (the DNS lesson), and
+# priceTextsIn returns {attached, other}; prices are paired in Python, not here.
+_PUNISH_JS = """
+    const PUNISH_RE = /_____tmd_____|\\/punish|x5secdata/i;
+    const isPunished = () => PUNISH_RE.test((document.location && document.location.href) || '')
+        || /^\\s*Пройдите проверку/i.test(document.title || '');
+"""
+
 _SEARCH_EXTRACT_TEMPLATE = """
 () => {
     //__SHARED_HELPERS__
-    const anchors = Array.from(document.querySelectorAll('a[href*="/item/"]'))
-        .filter(a => /\\/item\\/\\d{9,}\\.html/.test(a.getAttribute('href') || a.href || ''));
+    //__PUNISH__
+    // Only the main feed: below it the site appends «Подобрали для вас», unrelated to the query.
+    const feed = document.querySelector('[class*="SnowSearchProductFeed_List"]');
+    const text = (document.body && document.body.innerText) || '';
+    const nothing = /По запросу «[^»]*» ничего не найдено|Ничего не нашли/.test(text);
+    const anchors = feed ? Array.from(feed.querySelectorAll('a[href*="/item/"]'))
+        .filter(a => /\\/item\\/\\d{9,}\\.html/.test(a.getAttribute('href') || a.href || '')) : [];
     const out = [];
     const seen = new Set();
+    const DELIVERY_RE = /^(?:до|от)\\s+\\d+\\s+д|бесплатно$|доставк/i;
     const ratingLeaf = (tile) => {
         for (const el of tile.querySelectorAll('*')) {
             if (el.children.length) continue;
@@ -197,63 +200,54 @@ _SEARCH_EXTRACT_TEMPLATE = """
         }
         return null;
     };
-    let punished = /punish|проверк/i.test((document.location && document.location.href || '') + document.title);
     for (const a of anchors) {
-        if (out.length >= 48) break;
+        if (out.length >= __MAX_TILES__) break;
         const href = a.href || a.getAttribute('href') || '';
         const m = href.match(/\\/item\\/(\\d{9,})\\.html/);
         if (!m || seen.has(m[1])) continue;
         seen.add(m[1]);
         const tile = tileRootFor(a, /\\/item\\/(\\d{9,})\\.html/);
         if (!tile || !tile.textContent) continue;
-        const priceInfo = priceTextsIn(tile);
-        // The product name is the longest non-numeric leaf text. A leaf is
-        // "numeric" when digits dominate it — >= 2 digits AND over 40% of the
-        // chars — which drops "2 334 купили" and delivery lines while keeping
-        // model-bearing titles like "iPhone 15 Pro" and "Galaxy S24".
+        // The name is the longest leaf that digits do not dominate (>= 2 digits and > 40 %)
+        // and that is not the delivery line; some tiles render no name at all.
         let title = null, best = 5;
         for (const el of tile.querySelectorAll('*')) {
             if (el.children.length) continue;
             const t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
             if (!t || t.length > 140) continue;
-            if (DECOY_RE.test(t)) continue;
+            if (DECOY_RE.test(t) || DELIVERY_RE.test(t)) continue;
             const digits = ((t.match(/\\d/g) || []).length);
             if (digits >= 2 && !/купили$/i.test(t) && digits / t.length > 0.4) continue;
             if (t.length > best) { best = t.length; title = t; }
         }
-        const sku = (href.match(/sku_id=(\\d+)/) || [])[1] || null;
         out.push({
             item_id: m[1],
             title: title,
-            price_texts: priceInfo,
+            price_texts: priceTextsIn(tile),
             rating: ratingLeaf(tile),
             orders: ordersLeaf(tile),
-            sku_id: sku,
-            url: href
+            sku_id: (href.match(/sku_id=(\\d+)/) || [])[1] || null,
         });
     }
-    return JSON.stringify({items: out, punish: punished, page_title: document.title || ''});
+    return JSON.stringify({items: out, punish: isPunished(), feed: !!feed, nothing: nothing,
+        page_title: document.title || ''});
 }
 """
 
 _CARD_EXTRACT_TEMPLATE = """
 () => {
     //__SHARED_HELPERS__
-    const punished = /punish|проверк/i.test((document.location && document.location.href || '') + document.title);
+    //__PUNISH__
     const title = cleanText(document.querySelector('h1')) || null;
-    // The sticky offer bar carries both prices — measured wrappers in DOM order
-    // ['2 939 ₽', '6 967 ₽'] (current first). Scope the price read to the sticky
-    // module only: a body-wide scan would harvest "customers also bought" rails
-    // and label a neighbour's price as this product's strikethrough.
+    // Only the sticky offer bar: a body-wide scan would pick up neighbours' prices from the rails.
     const sticky = document.querySelector('[class*="HazeStickyOfferPrice__offerPrice"]')
         || document.querySelector('[class*="SnowStickyOffer"]');
-    const priceInfo = priceTextsIn(sticky);
     const ratingText = cleanText(document.querySelector('[class*="HazeProductDescription__ratingWrap"]'));
     const meta = (document.querySelector('meta[name="description"]') || {}).content || null;
     return JSON.stringify({
-        punish: punished,
+        punish: isPunished(),
         title: title,
-        price_texts: priceInfo,
+        price_texts: priceTextsIn(sticky),
         rating_text: ratingText,
         meta_description: meta,
         url: (document.location && document.location.href || ''),
@@ -261,249 +255,218 @@ _CARD_EXTRACT_TEMPLATE = """
 }
 """
 
-_SEARCH_EXTRACT_JS = _SEARCH_EXTRACT_TEMPLATE.replace("//__SHARED_HELPERS__", JS_HELPERS)
-_CARD_EXTRACT_JS = _CARD_EXTRACT_TEMPLATE.replace("//__SHARED_HELPERS__", JS_HELPERS)
+
+def _js(template: str) -> str:
+    return (
+        template.replace("//__SHARED_HELPERS__", JS_HELPERS)
+        .replace("//__PUNISH__", _PUNISH_JS)
+        .replace("__MAX_TILES__", str(MAX_TILES))
+    )
 
 
-# Price-shaped leaves that must never BE the product price. Courier delivery
-# costs, credit lines and «N ₽ с купоном» are each glyph-attached and would win
-# a min() pairing; the coupon value is kept aside for the warning instead.
-_PRICE_JUNK = ("купон", "доставк", "кредит", "рассрочк", "кэшбэк", "кешбэк", "бонус")
+_SEARCH_EXTRACT_JS = _js(_SEARCH_EXTRACT_TEMPLATE)
+_CARD_EXTRACT_JS = _js(_CARD_EXTRACT_TEMPLATE)
 
 
-def _scored_prices(
-    attached_raw: list[Any] | None,
-) -> tuple[list[float], float | None]:
-    """Split glyph-attached candidates into (regular prices, coupon value).
+def _scored_prices(attached_raw: list[Any] | None) -> tuple[list[float], float | None]:
+    """Split glyph-attached texts into (regular prices, lowest coupon price).
 
-    Returns copy-parsed floats; a leaf containing «купон» is a coupon price,
-    not the price a customer pays without opting in.
+    Only a bare number is a price: «N ₽ с купоном» needs opting in, and a delivery
+    line («завтра, от 109 ₽») is not the product's price at all.
     """
     regular: list[float] = []
     coupon: float | None = None
-    if not attached_raw:
-        return regular, coupon
-    for candidate in attached_raw:
-        text = str(candidate).lower()
-        parsed = R.coerce_price(candidate)
+    for candidate in attached_raw or []:
+        text = str(candidate).strip()
+        parsed = R.coerce_price(text)
         if parsed is None:
             continue
-        if "купон" in text:
-            if coupon is None or parsed < coupon:
-                coupon = parsed
-        elif any(junk in text for junk in _PRICE_JUNK):
-            continue
-        else:
+        if "купон" in text.lower():
+            coupon = parsed if coupon is None else min(coupon, parsed)
+        elif _BARE_PRICE_RE.fullmatch(text):
             regular.append(parsed)
     return regular, coupon
 
 
-def _tile_prices(tile: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
-    """(price, old_price, coupon_price) for a SEARCH tile.
-
-    Measured against the live grid (2026-08-20): priceTextsIn returns the BASE
-    first and the CURRENT price second — "6 967 ₽-58%2 939 ₽" renders as
-    {attached: ['6 967 ₽', '2 939 ₽']}. The shared prices_from_tile would take
-    attached[0] as THE price and ship the base as the current — the exact
-    "plausible and wrong" failure the doctrine forbids. The smallest non-junk
-    glyph-attached number is what the customer pays, the largest remaining is
-    the strikethrough. A «N ₽ с купоном» leaf is neither: it goes to the third
-    return value so the caller can warn, never into price_rub.
-    """
-    texts = tile.get("price_texts")
-    attached_raw = (
-        texts.get("attached") if isinstance(texts, dict) and isinstance(texts.get("attached"), list) else None
-    )
-    regular, coupon = _scored_prices(attached_raw)
-    if not regular:
-        price = R.price_from_texts(tile.get("price_text"), tile.get("price_rub"))
-        return price, None, coupon
-    current = min(regular)
-    above = [candidate for candidate in regular if candidate > current]
-    old_price = max(above) if above else R.price_from_texts(tile.get("old_price_text"))
-    if old_price is not None and old_price <= current:
-        old_price = None
-    return current, old_price, coupon
+def _attached(payload: dict[str, Any]) -> list[Any] | None:
+    texts = payload.get("price_texts")
+    attached = texts.get("attached") if isinstance(texts, dict) else None
+    return attached if isinstance(attached, list) else None
 
 
-_PRICE_UNSET: object = object()
-
-
-def _item_from_payload(
-    tile: dict[str, Any],
-    price: float | object | None = _PRICE_UNSET,
-    old_price: float | object | None = _PRICE_UNSET,
-) -> AliSearchItemOut:
-    """Map one extracted tile onto the wire shape, prices parsed in Python."""
-    if price is _PRICE_UNSET or old_price is _PRICE_UNSET:
-        computed, computed_old, _coupon = _tile_prices(tile)
-        if price is _PRICE_UNSET:
-            price = computed
-        if old_price is _PRICE_UNSET:
-            old_price = computed_old
-    orders = R.coerce_int(tile.get("orders"))
-    rating = R.coerce_rating(tile.get("rating"))
-    return AliSearchItemOut(
-        item_id=tile.get("item_id"),
-        title=title_from_tile(tile),
-        price_rub=cast("float | None", price),
-        old_price_rub=cast("float | None", old_price),
-        rating=rating,
-        orders_count=orders,
-        sku_id=tile.get("sku_id"),
-        url=tile.get("url"),
-    )
-
-
-async def _cdp_render_search(url: str, ctx: Context | None) -> dict[str, Any]:
-    """Open the search URL in the operator's Chrome and extract tiles."""
-    async with _cdp_lock:
-        await _polite_wait()
-        async with open_page(url, wait_ms=10000) as page:
-            raw = await asyncio.wait_for(page.evaluate(_SEARCH_EXTRACT_JS), timeout=30.0)
-    return _unwrap_extract(raw, "search")
-
-
-def _unwrap_extract(raw: Any, what: str) -> dict[str, Any]:
-    if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
-        raise ToolError(TransportDownError("extracted page data missing or over the body cap"))
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ToolError(ParserDriftError(f"non-JSON {what} extract; preview: {str(raw)[:200]}")) from exc
-    if not isinstance(data, dict):
-        raise ToolError(ParserDriftError(f"{what} extractor returned a non-object payload"))
-    return data
-
-
-async def _cdp_card(url: str, ctx: Context | None) -> dict[str, Any]:
-    """Open the item in a NEW TAB from the loaded landing page and read its DOM.
-
-    Direct navigation to item pages is challenged even in a warm profile; the
-    in-page open is not (measured 2026-08-20). The landing page also inherits
-    nothing from the caller: the URL is rebuilt from SITE_BASE here.
-    """
-    item_id = _extract_item_id(url) or ""
-    async with _cdp_lock:
-        await _polite_wait()
-        async with open_page(_LANDING, wait_ms=9000) as page:
-            opener = (
-                "() => { try { window.open("
-                + json.dumps(url)
-                + ", '_blank', 'noopener,noreferrer'); return 'opened'; } "
-                "catch (e) { return 'error:' + String(e); } }"
-            )
-            opened = await asyncio.wait_for(page.evaluate(opener), timeout=10.0)
-            if not isinstance(opened, str) or "opened" not in opened:
-                raise ToolError(TransportDownError(f"could not open the item tab ({opened})"))
-            # The sibling-tab walk needs the Playwright-managed page handle; the
-            # raw-CDP fallback in mcp_core deliberately exposes only url/evaluate.
-            # On that fallback the two-hop card read cannot work, and the honest
-            # answer is a transport error, never a broken half-read.
-            context = getattr(page, "context", None)
-            if context is None:
-                raise ToolError(
-                    TransportDownError(
-                        "aliexpress_card needs the Playwright-managed CDP page (tab-hopping); "
-                        "the raw-CDP fallback carries no page context. Run with the default transport."
-                    )
-                )
-            before = set(context.pages)
-            wants = f"/item/{item_id}"
-            target = None
-            # The tab must (a) be one THIS call opened and (b) carry the requested
-            # item id. Grabbing the nearest /item/ tab would silently answer with
-            # another product's card — a wrong price under a right id — and then
-            # close an operator's own tab.
-            for _ in range(20):
-                await asyncio.sleep(1)
-                for candidate in list(context.pages):
-                    if candidate in before:
-                        continue
-                    page_url = candidate.url or ""
-                    if wants in page_url and "punish" not in page_url:
-                        target = candidate
-                        break
-                if target is not None:
-                    break
-            if target is None:
-                # The tab was never delivered, or was closed under us. This is a
-                # transport outcome, not a proven challenge: record_refusal would
-                # poison the pacer's backoff for a refusal that never happened.
-                raise ToolError(
-                    TransportDownError(
-                        "the item tab never materialised (popup blocked, closed, or challenged); "
-                        "open aliexpress.ru in the scraping profile and retry — this is not a parser failure"
-                    )
-                )
-            try:
-                raw = None
-                # The sticky price module is client-rendered and lags the title:
-                # keep polling for gyph-attached prices; a title-only state is
-                # only accepted after half the budget, so a lazy module does not
-                # masquerade as a permanent price_missing (measured 2026-08-20).
-                for attempt in range(12):
-                    try:
-                        raw = await asyncio.wait_for(target.evaluate(_CARD_EXTRACT_JS), timeout=30.0)
-                        probe = json.loads(raw) if isinstance(raw, str) and raw.strip().startswith("{") else {}
-                        if probe.get("punish"):
-                            break
-                        if (probe.get("price_texts") or {}).get("attached"):
-                            break
-                        if attempt >= 6 and probe.get("title"):
-                            break
-                    except Exception:
-                        pass
-                    await asyncio.sleep(1)
-                if raw is None:
-                    raise ToolError(TransportDownError("item tab produced no extractable content"))
-                data = _unwrap_extract(raw, "card")
-                if _is_punish(data):
-                    _pacer.record_refusal()
-                    raise ToolError(_challenge_error("the item tab opened onto an x5sec challenge"))
-                return data
-            finally:
-                # Close the tab this call opened, matched or not, so a failed
-                # call cannot farm orphaned item tabs (the leak itself triggers
-                # x5sec). The scraping profile is dedicated to these fetches, so
-                # sweeping the freshly-created set is the safe bound.
-                try:
-                    await target.close()
-                except Exception:
-                    pass
-                for candidate in list(context.pages):
-                    if candidate in before:
-                        continue
-                    if "/item/" in (candidate.url or ""):
-                        try:
-                            await candidate.close()
-                        except Exception:
-                            pass
-
-
-def _card_prices(payload: dict[str, Any]) -> tuple[float | None, float | None]:
-    """(price, old_price) from the sticky-offer module, symmetric with tiles.
-
-    The sticky module was measured current-first, but the pairing does not
-    trust order: the smallest non-junk glyph-attached number is the price, the
-    largest above it is the strikethrough, and a jelly pair is dropped — the
-    same rule as _tile_prices, so a reordered sticky cannot ship the base as
-    the current (the exact "plausible and wrong" failure the search side
-    guards against).
-    """
-    texts = payload.get("price_texts") if isinstance(payload.get("price_texts"), dict) else {}
-    attached_raw = (
-        texts.get("attached") if isinstance(texts, dict) and isinstance(texts.get("attached"), list) else None
-    )
-    regular, _coupon = _scored_prices(attached_raw)
+def _pair(regular: list[float]) -> tuple[float | None, float | None]:
+    """Order-free pairing: the smallest price is paid, the largest above it is crossed out."""
     if not regular:
         return None, None
     price = min(regular)
     above = [candidate for candidate in regular if candidate > price]
-    old_price = max(above) if above else None
-    if old_price is not None and old_price <= price:
-        old_price = None
-    return price, old_price
+    return price, (max(above) if above else None)
+
+
+def _tile_prices(tile: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    """(price, old_price, coupon_price) for a search tile; the grid lists the base price first."""
+    regular, coupon = _scored_prices(_attached(tile))
+    price, old_price = _pair(regular)
+    return price, old_price, coupon
+
+
+def _card_prices(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    """(price, old_price) from the sticky offer bar, paired the same way as tiles."""
+    regular, _coupon = _scored_prices(_attached(payload))
+    return _pair(regular)
+
+
+def _item_from_payload(tile: dict[str, Any]) -> AliSearchItemOut:
+    price, old_price, _coupon = _tile_prices(tile)
+    item_id = str(tile.get("item_id") or "")
+    sku_id = tile.get("sku_id") if isinstance(tile.get("sku_id"), str) else None
+    return AliSearchItemOut(
+        item_id=item_id or None,
+        title=title_from_tile(tile),
+        price_rub=price,
+        old_price_rub=old_price,
+        rating=R.coerce_rating(tile.get("rating")),
+        orders_count=R.coerce_int(tile.get("orders")),
+        sku_id=sku_id,
+        url=_item_url(item_id, sku_id) if _BARE_ID_RE.fullmatch(item_id) else None,
+    )
+
+
+def _mentions_query(text: str, titles: list[str]) -> bool:
+    """Whether any title names a query word; a 5-letter stem covers Russian endings."""
+    words = re.findall(r"\w+", text.lower().replace("ё", "е"))
+    stems = [w[:5] for w in words if len(w) >= 3] or words
+    return any(stem in title.lower().replace("ё", "е") for title in titles for stem in stems)
+
+
+def _unwrap_extract(raw: Any, what: str) -> dict[str, Any]:
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_BODY_BYTES:
+        raise_tool_error(TransportDownError("extracted page data missing or over the body cap"))
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise_tool_error(ParserDriftError(f"non-JSON {what} extract; preview: {str(raw)[:200]}"))
+    if not isinstance(data, dict):
+        raise_tool_error(ParserDriftError(f"{what} extractor returned a non-object payload"))
+    return data
+
+
+def _search_settled(data: dict[str, Any], previous: int | None) -> bool:
+    """Done on a challenge, on «ничего не найдено», or once the tile count stops growing."""
+    count = len(data.get("items") or [])
+    return bool(data.get("punish") or data.get("nothing") or (count and count == previous))
+
+
+async def _cdp_render_search(url: str, ctx: Context | None) -> dict[str, Any]:
+    """Open the search URL in the profile's Chrome and extract the main feed's tiles."""
+    async with _cdp_lock:
+        await _polite_wait()
+        try:
+            async with open_page(url, wait_ms=0) as page:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + _RENDER_WAIT_S
+                previous: int | None = None
+                while True:
+                    await asyncio.sleep(_POLL_S)
+                    data = _unwrap_extract(
+                        await asyncio.wait_for(page.evaluate(_SEARCH_EXTRACT_JS), timeout=30.0), "search"
+                    )
+                    if _search_settled(data, previous) or loop.time() >= deadline:
+                        break
+                    previous = len(data.get("items") or [])
+        except NavBlocked as exc:
+            _nav_failed(exc)
+        except NavigationPolicyError:
+            _left_site()
+    if _is_punish(data):
+        _pacer.record_refusal("x5sec challenge")
+    else:
+        _pacer.record_success()
+    return data
+
+
+async def _cdp_card(url: str, ctx: Context | None) -> dict[str, Any]:
+    """Open the item in a new tab from a loaded search page and read that tab's DOM.
+
+    A direct navigation to an item page is challenged; ``window.open`` from the
+    search tab is not. The URL is rebuilt from SITE_BASE by the caller.
+    """
+    item_id = _extract_item_id(url) or ""
+    async with _cdp_lock:
+        await _polite_wait()
+        try:
+            async with open_page(_LANDING, wait_ms=6000) as page:
+                return await _read_item_tab(page, url, item_id)
+        except NavBlocked as exc:
+            _nav_failed(exc)
+        except NavigationPolicyError:
+            _left_site()
+
+
+async def _read_item_tab(page: Any, url: str, item_id: str) -> dict[str, Any]:
+    landing = _unwrap_extract(await asyncio.wait_for(page.evaluate(_CARD_EXTRACT_JS), timeout=30.0), "landing")
+    if _is_punish(landing):
+        _refuse("x5sec challenge", _challenge_error("the search page opened onto an x5sec challenge"))
+    # The sibling-tab walk needs Playwright's page context; the raw-CDP fallback has none.
+    context = getattr(page, "context", None)
+    if context is None:
+        raise_tool_error(
+            TransportDownError(
+                "aliexpress_card needs the Playwright-attached tab (it opens the item from the search tab); "
+                "the raw-CDP fallback cannot follow a new tab"
+            )
+        )
+    before = set(context.pages)
+    # noopener: the item page must not script the search tab; the Referer stays, as in the live check.
+    opened = await asyncio.wait_for(
+        page.evaluate(
+            "() => { try { window.open(" + json.dumps(url) + ", '_blank', 'noopener'); return 'opened'; } "
+            "catch (e) { return 'error:' + String(e); } }"
+        ),
+        timeout=10.0,
+    )
+    if not isinstance(opened, str) or "opened" not in opened:
+        raise_tool_error(TransportDownError(f"could not open the item tab ({opened})"))
+    wants = f"/item/{item_id}"
+    target = None
+    try:
+        for _ in range(20):
+            await asyncio.sleep(_POLL_S)
+            fresh = [candidate for candidate in context.pages if candidate not in before]
+            if any("punish" in (candidate.url or "") for candidate in fresh):
+                _refuse("x5sec challenge", _challenge_error("the item tab opened onto an x5sec challenge"))
+            # Only a tab this call opened, with the requested id: a neighbour's tab would answer with its price.
+            target = next((candidate for candidate in fresh if wants in (candidate.url or "")), None)
+            if target is not None:
+                break
+        if target is None:
+            raise_tool_error(TransportDownError("the item tab never opened (popup blocked or closed)"))
+        raw = None
+        # The sticky price module renders after the title; a title-only state is accepted after 6 polls.
+        for attempt in range(12):
+            try:
+                raw = await asyncio.wait_for(target.evaluate(_CARD_EXTRACT_JS), timeout=30.0)
+                probe = json.loads(raw) if isinstance(raw, str) and raw.strip().startswith("{") else {}
+                if probe.get("punish") or _attached(probe) or (attempt >= 6 and probe.get("title")):
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(_POLL_S)
+        if raw is None:
+            raise_tool_error(TransportDownError("item tab produced no extractable content"))
+        data = _unwrap_extract(raw, "card")
+        if _is_punish(data):
+            _refuse("x5sec challenge", _challenge_error("the item tab opened onto an x5sec challenge"))
+        _pacer.record_success()
+        return data
+    finally:
+        # Close every tab this call opened, matched or not: orphaned item tabs themselves draw x5sec.
+        for candidate in list(context.pages):
+            if candidate not in before:
+                try:
+                    await candidate.close()
+                except Exception:
+                    pass
 
 
 # -------------------------------------------------------------------- tools ----
@@ -519,18 +482,21 @@ async def aliexpress_search(
     query: Annotated[str, Field(min_length=1, max_length=200, description="Search text, e.g. 'умные часы'")],
     ctx: Context | None = None,
 ) -> AliSearchResponse:
-    """Search AliExpress, rendered in the operator's Chrome.
+    """Search AliExpress, rendered in the plugin's Chrome profile; the main feed in the site's order.
+
+    AliExpress fills a query it cannot match with unrelated goods; when no tile names
+    the query they are dropped with a ``no_match`` warning.
 
     ## Return Format
 
     AliSearchResponse: {status, query, tier_used, count, items[], meta}.
-    price_rub is None when absent — never 0.
+    price_rub is None when absent — never 0; a coupon price is never price_rub.
 
     ## Error Format
 
-    ToolError: TransportDownError on x5sec challenges or CDP failures (with the
-    manual-check hint inline); ParserDriftError when a rendered page yields zero
-    product tiles.
+    ToolError: challenge_required on the x5sec check (AliExpress stops for 30 min);
+    transport_down on a refused tab or CDP failure; parser_drift when a rendered page
+    has neither tiles nor «ничего не найдено».
     """
     log_event("aliexpress_search.start", query=query[:60])
     try:
@@ -539,43 +505,39 @@ async def aliexpress_search(
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_render_search(url, ctx)
-            except NavBlocked as exc:
-                raise_tool_error(TransportDownError(f"AliExpress navigation blocked (HTTP {exc.status})."))
+            payload = await _cdp_render_search(url, ctx)
             if _is_punish(payload):
-                _pacer.record_refusal()
                 raise_tool_error(_challenge_error())
             tier = "cdp"
-        items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
-        if not items_raw:
+        tiles = [t for t in (payload.get("items") or []) if isinstance(t, dict)]
+        if not tiles and not payload.get("nothing"):
             raise_tool_error(
                 ParserDriftError(
-                    "rendered search page yielded zero product tiles — either the query matched nothing "
-                    "or the DOM shape moved; verify manually"
+                    "rendered search page has neither product tiles nor «ничего не найдено» — the DOM shape moved"
                 )
             )
-        # Persist only validated payloads: caching a transitively empty render
-        # would block self-healing retries for the whole cache TTL.
         _cache.set(url, payload)
-        items = []
-        coupon_seen = 0
-        for t in items_raw:
-            if not isinstance(t, dict):
-                continue
-            price, old_price, coupon = _tile_prices(t)
-            if coupon is not None:
-                coupon_seen += 1
-            items.append(_item_from_payload(t, price=price, old_price=old_price))
         warnings: list[str] = []
-        if items and all(it.price_rub is None for it in items):
+        items: list[AliSearchItemOut] = []
+        coupon_seen = 0
+        for tile in tiles:
+            coupon_seen += _tile_prices(tile)[2] is not None
+            items.append(_item_from_payload(tile))
+        if not items:
+            warnings.append("empty: AliExpress found nothing for the query")
+        elif not _mentions_query(query, [item.title or "" for item in items]):
+            warnings.append(
+                f"no_match: AliExpress listed {len(items)} goods, none names the query — dropped as unrelated"
+            )
+            items, coupon_seen = [], 0
+        if items and all(item.price_rub is None for item in items):
             warnings.append("no_prices_on_page")
-        if len(items) >= 48:
-            warnings.append("truncated_at_48: the grid exceeds the 48-tile cap — refine the query to see the rest")
+        if len(items) >= MAX_TILES:
+            warnings.append(f"truncated_at_{MAX_TILES}: refine the query to see the rest")
         if coupon_seen:
             warnings.append(
                 f"{coupon_seen} tile(s) advertise a coupon price; price_rub carries the regular "
-                f"price and the coupon value is not part of the response — treat 'cheapest' ranking with care"
+                "price and the coupon value is not part of the response"
             )
         result = AliSearchResponse(query=query, tier_used=tier, count=len(items), items=items)
         attached = R.attach_meta(
@@ -613,7 +575,7 @@ async def aliexpress_card(
     ],
     ctx: Context | None = None,
 ) -> AliCardResponse:
-    """Fetch one AliExpress product card, rendered in the operator's Chrome.
+    """Fetch one AliExpress product card, opened from a search tab in the plugin's Chrome profile.
 
     Review TEXTS are deliberately not exposed: they require navigating the
     review tab, which x5sec challenges; this tool returns the rating and the
@@ -626,9 +588,9 @@ async def aliexpress_card(
 
     ## Error Format
 
-    ToolError: BadRequestError when no item id can be extracted;
-    TransportDownError on x5sec challenges or CDP failures; ParserDriftError
-    when a rendered card has neither title nor price.
+    ToolError: bad_request when no item id can be extracted; challenge_required on
+    the x5sec check (AliExpress stops for 30 min); transport_down on a refused tab
+    or CDP failure; parser_drift when a rendered card has neither title nor price.
     """
     log_event("aliexpress_card.start", input=item_id_or_url[:80])
     try:
@@ -647,13 +609,9 @@ async def aliexpress_card(
         if cached is not None:
             payload, tier = cached, "cache"
         else:
-            try:
-                payload = await _cdp_card(url, ctx)
-            except NavBlocked as exc:
-                raise_tool_error(TransportDownError(f"AliExpress navigation blocked (HTTP {exc.status})."))
+            payload = await _cdp_card(url, ctx)
             if _is_punish(payload):
-                _pacer.record_refusal()
-                raise_tool_error(_challenge_error())
+                _refuse("x5sec challenge", _challenge_error())
             tier = "cdp"
             _cache.set(url, payload)
         title = R.flatten_text(payload.get("title"))
@@ -760,7 +718,7 @@ async def _aliexpress_selfcheck_impl(ctx: Context | None) -> AliSelfcheckRespons
         checks["search"] = R.selfcheck_entry(
             "inconclusive",
             baseline=baseline,
-            reason="blocked" if "challenge" in str(exc) else "transport_down",
+            reason="blocked" if "challenge" in str(exc) or "stopped" in str(exc) else "transport_down",
             notes=[str(exc)[:160]],
         )
     except Exception as exc:
@@ -817,7 +775,7 @@ async def _aliexpress_selfcheck_impl(ctx: Context | None) -> AliSelfcheckRespons
             checks["card"] = R.selfcheck_entry(
                 "inconclusive",
                 baseline="cdp-card-shape-v1",
-                reason="blocked" if "challenge" in str(exc) else "transport_down",
+                reason="blocked" if "challenge" in str(exc) or "stopped" in str(exc) else "transport_down",
                 notes=[str(exc)[:160]],
             )
         except Exception as exc:

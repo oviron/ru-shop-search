@@ -22,11 +22,12 @@ def _extract(source: str, fixture: Path, url: str) -> dict:
 def test_search_extractor_shape_matches_golden() -> None:
     payload = _extract(
         server._SEARCH_EXTRACT_JS,
-        FIXTURES / "search_grid.html",
+        FIXTURES / "search_realme_live.html",
         "https://aliexpress.ru/wholesale?SearchText=x",
     )
 
     assert shape_signature(payload) == [
+        "feed:bool",
         "items[].item_id:str",
         "items[].orders:str",
         "items[].price_texts.attached[]:str",
@@ -35,7 +36,7 @@ def test_search_extractor_shape_matches_golden() -> None:
         "items[].rating:str",
         "items[].sku_id:str",
         "items[].title:str",
-        "items[].url:str",
+        "nothing:bool",
         "page_title:str",
         "punish:bool",
     ]

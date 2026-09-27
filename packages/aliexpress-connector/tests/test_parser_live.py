@@ -3,7 +3,7 @@
 The offline suite above monkeypatches the render step and asserts the tool
 contract around parsed tiles; what it deliberately cannot prove is that the
 extractor JavaScript still understands the site's markup. That half runs here
-against the trimmed real pages captured 2026-08-20 (see fixtures/*.provenance.json
+against trimmed real pages (see fixtures/*.provenance.json
 for what those pages displayed), in jsdom when available. Mocking the render
 call and feeding pre-parsed dicts is exactly how the DNS and Citilink bug
 classes lived while 707 tests stayed green.
@@ -19,7 +19,8 @@ from mcp_core.domtest import JsdomUnavailable, run_extractor
 
 HERE = Path(__file__).parent
 FIXTURES = HERE / "fixtures"
-SEARCH_FIXTURE = FIXTURES / "search_grid.html"
+SEARCH_FIXTURE = FIXTURES / "search_realme_live.html"
+NONSENSE_FIXTURE = FIXTURES / "search_nonsense_live.html"
 CARD_FIXTURE = FIXTURES / "card.html"
 SEARCH_PAGE_URL = "https://aliexpress.ru/wholesale?SearchText=realme+watch"
 
@@ -33,39 +34,36 @@ def _run(js_source, fixture, page_url):
     return payload
 
 
-def test_search_extractor_reads_the_captured_grid():
+def test_search_extractor_reads_only_the_main_feed():
     payload = _run(server._SEARCH_EXTRACT_JS, SEARCH_FIXTURE, SEARCH_PAGE_URL)
 
-    assert payload.get("punish") is False
+    assert (payload.get("punish"), payload.get("feed")) == (False, True)
     items = [t for t in payload.get("items") or [] if isinstance(t, dict)]
-    assert items, "the real extractor found no tiles in the captured grid"
-
-    # The two tiles the provenance records: current price is the smaller number.
+    assert len(items) == 17, "the feed held 17 tiles; «Подобрали для вас» below it is not the answer"
     by_id = {t.get("item_id"): t for t in items}
-    realme = by_id.get("1005010003103368")
-    assert realme is not None, "the recorded Realme tile is missing"
-    attached = (realme.get("price_texts") or {}).get("attached") or []
-    assert "2 939 ₽" in attached
-    assert "6 967 ₽" in attached
-    assert realme.get("orders") == "2334"
-    assert realme.get("title")
-
-    s5 = by_id.get("1005012078314868")
-    if s5 is not None:
-        attached_s5 = (s5.get("price_texts") or {}).get("attached") or []
-        assert "5 579 ₽" in attached_s5, "the coupon/base pair of the S5 tile changed shape"
+    realme = by_id["1005010003103368"]
+    assert realme.get("title") == "Realme Watch 5 смарт-часы"
+    assert (realme.get("price_texts") or {}).get("attached") == ["7 064 ₽", "3 049 ₽"]
+    assert (realme.get("rating"), realme.get("orders")) == ("4.7", "2578")
+    # This tile's delivery line is longer than its name and used to win as the title.
+    assert by_id["1005006996441269"].get("title") == "Часы Realme Watch 5"
 
 
 def test_search_extractor_pairing_agrees_with_python():
-    """Parser-to-wire: the DOM order (base, current) must yield current=min."""
+    """Parser-to-wire: the DOM order (base, current) must yield current=min; a coupon is never the price."""
     payload = _run(server._SEARCH_EXTRACT_JS, SEARCH_FIXTURE, SEARCH_PAGE_URL)
-    items = [t for t in payload.get("items") or [] if isinstance(t, dict)]
-    assert items
-    parsed = [server._item_from_payload(t) for t in items]
-    realme = next((p for p in parsed if p.item_id == "1005010003103368"), None)
-    assert realme is not None
-    assert realme.price_rub == 2939.0, "the extractor+pairing must ship the current price, not the base"
-    assert realme.old_price_rub == 6967.0
+    parsed = {p.item_id: p for p in (server._item_from_payload(t) for t in payload["items"])}
+
+    assert (parsed["1005010003103368"].price_rub, parsed["1005010003103368"].old_price_rub) == (3049.0, 7064.0)
+    assert (parsed["1005012078314868"].price_rub, parsed["1005012078314868"].old_price_rub) == (5781.0, None)
+
+
+def test_a_nonsense_query_leaves_only_unrelated_goods_in_the_feed():
+    payload = _run(server._SEARCH_EXTRACT_JS, NONSENSE_FIXTURE, SEARCH_PAGE_URL)
+    titles = [t.get("title") or "" for t in payload["items"]]
+
+    assert len(titles) == 5, "59 links on the page, 5 in the feed; the rest are recommendations"
+    assert not server._mentions_query("абырвалгщзх", titles)
 
 
 def test_card_extractor_reads_the_captured_modules():

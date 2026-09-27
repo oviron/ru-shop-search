@@ -35,7 +35,7 @@ inside a real browser.
 | Regard | ✅ 200 (разведка) | не встречен | ✅ `curl_cffi` |
 | Никс | не проверено | не встречен; поиск подписан JS страницы | ✅ поиск вкладкой, карточка `curl_cffi` |
 | Холодильник | не проверено | не встречен | ✅ `curl_cffi` |
-| AliExpress | ❌ x5sec challenge | x5sec; search works in a real Chrome | ✅ via your Chrome |
+| AliExpress | ❌ x5sec (апстрим, август 2026) | x5sec: прямой переход на товар даёт проверку | ✅ вкладка профиля, карточка из вкладки выдачи |
 
 A second live run in July 2026 confirmed all four CDP sources on the maintainer's
 own machine — a Russian residential IP, a logged-in Chrome over CDP — and it
@@ -637,63 +637,47 @@ that `inconclusive` from a geo block says nothing about whether the parsers stil
 work.
 
 
-## AliExpress (added 2026-08-20)
+## AliExpress — вкладка профиля, x5sec останавливает магазин
 
-Scope: one vantage point — a Russian residential IP, an anonymous scraping
-profile, 2026-08-20. From a datacenter IP or another geo the pattern will be
-stricter or different (a challenge on the search page itself is likely); the
-numbers below are a snapshot, not a constant. Prices are RUB-locale by the
-profile's region; a different ship-to region shifts both prices and the shape
-of challenges. Before quoting any of this today, run `aliexpress_selfcheck`
-from your own session.
+Проверено 2026-09-27 с домашнего адреса во вкладке анонимного профиля плагина, Chrome 153
+через Playwright. За вечер ушло до 20 навигаций, проверки x5sec не было. Пункты про HTTP
+и нагрузку — разведка апстрима 2026-08-20 с того же типа адреса, их не перепроверяли.
 
-**Anonymous HTTP — nothing usable:**
-
-- item page: HTTP 200 with an x5sec challenge stub (`_____tmd_____/punish?x5secdata=…`,
-  «Пройдите проверку»), ~1 889 bytes. Full browser headers and language do not help.
-- search / category: 200, but a hollow SPA shell — `__AER_DATA__` carries zero
-  catalog data (empty `widgets.paths`), tiles are client-rendered. Why the shell
-  is empty was not isolated: it can be SPA architecture or the server declining
-  to ship data to a low-trust client — both read the same from the outside.
-- h5api item route (`acs.aliexpress.ru/h5/aapi/sc-item-detail/2.0`): route gone —
-  `FAIL_SYS_API_NOT_FOUNDED` (single probe; an API-rename, not proven anti-bot).
-- reviews (`feedback.aliexpress.ru/display/evaluationProductDetailAjaxService.htm`):
-  HTTP 500 (single probe; server error, not proven a block).
-
-**Real Chrome, challenge-passed session:**
-
-- search page renders fully: 31-96 tiles with prices, discount badges, ratings and
-  «N купили» lines; the landing search never challenges. The queries used were
-  topical («smart watch», «realme watch»); a distinctive-query relevance test
-  (the Detsky Mir lesson) was NOT run separately, so "search actually searches"
-  is evidenced by topical output, not by a controlled probe.
-- DIRECT navigation to an item page is challenged even in the warm profile. The
-  trigger is the navigation level, not the IP: in the SAME session a same-origin
-  in-page fetch of the item URL answers 200. Do not "fix" this by retrying
-  direct gotos — that only burns profile reputation. The working path is
-  search → open the card in a new tab.
-- in-page `fetch(itemUrl)` from the loaded search page: 200, 486 KB SSR shell, no
-  challenge — but the SSR carries no price (h1, og/meta description with the rating
-  and «N заказов» present).
-- `window.open(itemUrl)` from the loaded search page: the real card renders in
-  the new tab, prices included. This is the transport the connector uses.
-
-**Load behaviour (question 5 of the doctrine):** after many rapid probes x5sec
-degrades quietly — the search grid keeps working, but new-tab card renders come
-back with the price module stripped (title present, no ₽ anywhere). The measured
-threshold is not established (qualitative, at double-digit burst counts). The
-connector reports that state as `price_missing`, never as a fabricated number,
-and the selfcheck marks it `inconclusive`. A full challenge wall on the landing
-maps to a transport error telling the operator to pass the check by hand in the
-scraping window. The connector cannot tell "anti-bot stripped the price" from
-"this listing genuinely has no price" — either way the answer is None plus a
-warning, and a run of price_missing answers means back off, not push harder.
-
-**Not implemented (and why):** review TEXTS require navigating the review tab,
-which is challenge-prone; the connector ships rating + order counts only — if the
-tab ever stops challenging, a reviews tool becomes a small addition. The
-mtop/h5api signature is not reversed: x5sec is not solved programmatically, and
-per-request proof-of-work is precisely the case the doctrine calls "Neither".
-The connector does not pretend otherwise: on a challenge it degrades into
-`price_missing`/transport errors and tells the operator to pass the check by
-hand.
+- **HTTP без браузера бесполезен** (апстрим). Страница товара отвечает 200 с заглушкой
+  x5sec (`_____tmd_____/punish?x5secdata=…`, «Пройдите проверку»). Выдача — пустая
+  оболочка SPA, `__AER_DATA__` без товаров. Маршрут h5api карточки исчез
+  (`FAIL_SYS_API_NOT_FOUNDED`), отзывы ответили 500.
+- **Выдача** `/wholesale?SearchText=<запрос>` рендерится во вкладке. Плитки товаров
+  лежат в ленте `SnowSearchProductFeed_List`, после неё идут «Вы всё посмотрели» и
+  «Подобрали для вас» с такими же плитками и ценами. Коннектор читает только ленту:
+  на «абырвалгщзх» на странице было 59 ссылок на товары, в ленте — 5. Готовность —
+  когда число плиток перестало расти, есть признак «ничего не найдено» или проверка
+  x5sec; дедлайн 15 с.
+- **Нечёткий поиск.** На бессмысленный запрос сайт предлагает исправление и показывает
+  посторонние товары: монитор, водонагреватель, волосы для наращивания. Если ни одна
+  плитка не называет слов запроса, коннектор отдаёт пустой список с `no_match`.
+- **Цена.** В плитке базовая цена стоит первой, текущая — второй; коннектор берёт
+  меньшую как цену, большую как зачёркнутую. Ценой считается только текст, который
+  целиком число с «₽»: «5 348 ₽ с купоном» — цена по купону, она не идёт в `price_rub`
+  и попадает только в предупреждение; строки доставки вида «до 14 дней, от 109 ₽» —
+  тоже не цена. Строка доставки не считается и названием, хотя бывает длиннее его.
+- **Карточка.** Прямой переход на `/item/<id>.html` даёт x5sec даже в прогретом профиле
+  (апстрим), поэтому коннектор его не делает. Он открывает выдачу-лендинг и из неё
+  вызывает `window.open` на товар с `noopener`, чтобы страница товара не могла управлять
+  вкладкой выдачи; новая вкладка рендерит карточку с ценой. Принимается
+  только вкладка с `/item/<id>` нужного товара, все новые вкладки закрываются. Этому
+  нужна вкладка Playwright: на raw CDP (запасной путь при зависании подключения) у
+  страницы нет контекста, и карточка отвечает `transport_down`.
+- **Ссылка** — канонический `aliexpress.ru/item/<id>.html`, с `?sku_id=` варианта, если
+  он был в плитке; остальные параметры плитки отбрасываются.
+- **Нагрузка** (апстрим). После серии быстрых проб x5sec выдачу не трогал, но карточки
+  в новых вкладках приходили без блока цены. Порог не измерен. Коннектор отдаёт такую
+  карточку с пустой ценой и предупреждением `price_missing`, а не с выдуманным числом;
+  серия таких ответов — повод остановиться.
+- **Отказы.** Проверка x5sec — `/punish`, `_____tmd_____` или `x5secdata` в адресе
+  вкладки, либо заголовок «Пройдите проверку» — останавливает AliExpress на 30 минут
+  с `challenge_required`. Проверку не проходим ни руками, ни кликом. 401/403/418/429
+  при навигации и уход вкладки с `aliexpress.ru` тоже стоп. Прочие сбои вкладки —
+  `transport_down` без стопа.
+- **Не сделано.** Тексты отзывов: вкладка отзывов провоцирует проверку, коннектор
+  отдаёт только рейтинг и число заказов. Подпись mtop/h5api не вскрываем.

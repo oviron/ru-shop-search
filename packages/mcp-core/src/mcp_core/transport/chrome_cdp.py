@@ -411,7 +411,7 @@ def cdp_setup_hint() -> str:
 class _CdpConnectTimeout(RuntimeError):
     """Chrome listens on the CDP port, but Playwright cannot finish the attach.
 
-    Chrome >= 151 stopped answering Playwright's connect_over_cdp handshake:
+    Some Chrome builds (seen on 151; 153 attaches) hang Playwright's connect_over_cdp handshake:
     the websocket connects, then the driver's attach sequence hangs until
     timeout while plain CDP commands over the same socket answer fine. Callers
     that see this should fall back to the raw-CDP path instead of blaming the
@@ -547,7 +547,7 @@ async def probe_session(*, timeout_s: float = 15.0) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 # Raw-CDP fallback
 #
-# Chrome >= 151 no longer completes Playwright's connect_over_cdp handshake,
+# Some Chrome builds (seen on 151) do not complete Playwright's connect_over_cdp handshake,
 # but the same browser answers plain CDP over the websocket without trouble.
 # Everything below drives one tab over that raw protocol, exposing exactly the
 # two things the connectors use from a Playwright Page: ``evaluate`` and
@@ -908,7 +908,7 @@ async def open_page(
         that reloads itself into a 200 within that time passes;
       * tab creation, navigation and teardown are individually bounded, so a
         wedged CDP session cannot hang a tool call indefinitely;
-      * when Playwright cannot finish its attach handshake (Chrome >= 151),
+      * when Playwright cannot finish its attach handshake (seen on Chrome 151),
         the same tab lifecycle runs over raw CDP instead.
 
     Only ``SHOP_DOMAINS`` hosts open at all; which paths are legitimate stays the
