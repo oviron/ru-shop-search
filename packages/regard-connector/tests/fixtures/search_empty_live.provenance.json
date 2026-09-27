@@ -1,0 +1,10 @@
+{
+  "url": "https://www.regard.ru/catalog?search=qzxwvkjh%20plmnbq",
+  "captured_at": "2026-09-27",
+  "sha256": "020e4b44b00fd6678c7000e036f8eabaa1f16820659a19d8a59eafa58f1452e4",
+  "method": "captured live on 2026-09-27 20:58:26, 200, 795 KB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title> and __NEXT_DATA__ rebuilt from the live one. Kept: props.initialState.town (cookieTownId, the first three townsHits as id and name); listing.data.bySearch recordsFiltered 0, pageIndex, searchKey, empty pages. Dropped: filters and the rest of the state",
+  "ground_truth": {
+    "city": "Москва",
+    "recordsFiltered": 0
+  }
+}

@@ -36,6 +36,7 @@ EXPECTED_INSTALLED = {
     "citilink",
     "mvideo",
     "vseinstrumenti",
+    "regard",
     "aliexpress",
 }
 

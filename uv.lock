@@ -22,6 +22,7 @@ members = [
     "mcp-core",
     "mvideo-connector",
     "ozon-connector",
+    "regard-connector",
     "ru-shop-search",
     "vseinstrumenti-connector",
     "wb-connector",
@@ -381,6 +382,7 @@ all = [
     { name = "lamoda-connector" },
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
+    { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
 ]
 avito = [
@@ -400,6 +402,9 @@ mvideo = [
 ]
 ozon = [
     { name = "ozon-connector" },
+]
+regard = [
+    { name = "regard-connector" },
 ]
 vseinstrumenti = [
     { name = "vseinstrumenti-connector" },
@@ -426,12 +431,14 @@ requires-dist = [
     { name = "ozon-connector", marker = "extra == 'ozon'", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
+    { name = "regard-connector", marker = "extra == 'all'", editable = "packages/regard-connector" },
+    { name = "regard-connector", marker = "extra == 'regard'", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", marker = "extra == 'all'", editable = "packages/vseinstrumenti-connector" },
     { name = "vseinstrumenti-connector", marker = "extra == 'vseinstrumenti'", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
 ]
-provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "aliexpress", "all"]
+provides-extras = ["ozon", "avito", "lamoda", "dns", "citilink", "mvideo", "vseinstrumenti", "regard", "aliexpress", "all"]
 
 [[package]]
 name = "coverage"
@@ -1221,6 +1228,7 @@ dependencies = [
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
     { name = "pydantic" },
+    { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
     { name = "wb-connector" },
     { name = "yandex-connector" },
@@ -1240,6 +1248,7 @@ requires-dist = [
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
     { name = "pydantic", specifier = ">=2.6" },
+    { name = "regard-connector", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },
@@ -1892,6 +1901,27 @@ wheels = [
 ]
 
 [[package]]
+name = "regard-connector"
+version = "2.4.2"
+source = { editable = "packages/regard-connector" }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "fastmcp" },
+    { name = "mcp-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "curl-cffi", specifier = ">=0.8" },
+    { name = "fastmcp", specifier = ">=3.4.6,<4" },
+    { name = "mcp-core", editable = "packages/mcp-core" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "pydantic-settings", specifier = ">=2.2" },
+]
+
+[[package]]
 name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2029,6 +2059,7 @@ dependencies = [
     { name = "mcp-core" },
     { name = "mvideo-connector" },
     { name = "ozon-connector" },
+    { name = "regard-connector" },
     { name = "vseinstrumenti-connector" },
     { name = "wb-connector" },
     { name = "yandex-connector" },
@@ -2059,6 +2090,7 @@ requires-dist = [
     { name = "mcp-core", editable = "packages/mcp-core" },
     { name = "mvideo-connector", editable = "packages/mvideo-connector" },
     { name = "ozon-connector", editable = "packages/ozon-connector" },
+    { name = "regard-connector", editable = "packages/regard-connector" },
     { name = "vseinstrumenti-connector", editable = "packages/vseinstrumenti-connector" },
     { name = "wb-connector", editable = "packages/wb-connector" },
     { name = "yandex-connector", editable = "packages/yandex-connector" },

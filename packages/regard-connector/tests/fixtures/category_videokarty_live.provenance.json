@@ -1,0 +1,16 @@
+{
+  "url": "https://www.regard.ru/catalog/1013/videokarty?q=eyJzaG93SGlkZGVuIjp0cnVlfQ&search=%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE%D0%BA%D0%B0%D1%80%D1%82%D0%B0&searchStep=2",
+  "captured_at": "2026-09-27",
+  "sha256": "e24d1735ece2b6fc3b5cb0efb6408d80c607862a417ddfd3a5dae3dd888551a6",
+  "method": "captured live on 2026-09-27 21:07:43, 200, 1.6 MB, with curl_cffi (impersonate=chrome) from the home IP, no cookies; the address is where /catalog?search=видеокарта answered 301 at 21:07:29. The page is a minimal stand-in: <title> and __NEXT_DATA__ rebuilt from the live one. Kept: props.initialState.town (cookieTownId, the first three townsHits as id and name); listing.data[\"1013\"] recordsFiltered, pageIndex, searchKey, queryHash and 4 of the 24 rows of page 0 (rows 1, 3, 16, 23), each cut to id, title, full_title, price, price_old, vendor, vendorcode, reviews_count, reviews_stars, seo_url, max_day, preorder, show_flag, discounted_price, bonus; page and query of __NEXT_DATA__. Dropped: filters, receipts, badges, photos, modifications and the rest of the state",
+  "ground_truth": {
+    "city": "Москва",
+    "recordsFiltered": 4549,
+    "rows": {
+      "750211": "52 990, max_day 1",
+      "737606": "89 990, max_day 1",
+      "720863": "19 680, max_day 1",
+      "488227": "48 150, max_day 3"
+    }
+  }
+}

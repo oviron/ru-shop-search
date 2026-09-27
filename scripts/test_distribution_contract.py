@@ -54,6 +54,7 @@ def test_all_comparison_sources_have_a_wheelhouse_dependency() -> None:
         "citilink": "citilink-connector",
         "mvideo": "mvideo-connector",
         "vseinstrumenti": "vseinstrumenti-connector",
+        "regard": "regard-connector",
         "aliexpress": "aliexpress-connector",
     }
     metadata = tomllib.loads((ROOT / "packages" / "compare-connector" / "pyproject.toml").read_text(encoding="utf-8"))[

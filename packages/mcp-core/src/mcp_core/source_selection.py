@@ -34,6 +34,7 @@ KNOWN_SOURCES = frozenset(
         "citilink",
         "mvideo",
         "vseinstrumenti",
+        "regard",
         "aliexpress",
         "compare",
     }

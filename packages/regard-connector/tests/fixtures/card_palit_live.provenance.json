@@ -1,0 +1,12 @@
+{
+  "url": "https://www.regard.ru/product/737606/videokarta-nvidia-geforce-rtx-5070-palit-infinity-3-12gb-ne75070019k9-gb2050s",
+  "captured_at": "2026-09-27",
+  "sha256": "5cd4d4f3df4f71b76aa301622f25836f84b30f55cef786d9b92715f1e45c8bb1",
+  "method": "captured live on 2026-09-27 20:56:32, 200, 1.05 MB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title> and __NEXT_DATA__ rebuilt from the live one. Kept: props.initialState.town (cookieTownId, the first three townsHits as id and name); product.data cut to the same fields as a search row but max_day (the card has none), product.responseStatus; the schema.org Product cut to name, sku, brand, offers, aggregateRating. Dropped: characteristics, reviews, similar products and the rest of the state, including product.data.author (null on the page)",
+  "ground_truth": {
+    "price": "89 990 in data and in the schema.org offer",
+    "availability": "InStock",
+    "rating": "5 of 3 reviews",
+    "city": "Москва"
+  }
+}

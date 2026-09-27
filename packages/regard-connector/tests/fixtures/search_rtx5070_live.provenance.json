@@ -1,0 +1,18 @@
+{
+  "url": "https://www.regard.ru/catalog?search=rtx%205070",
+  "captured_at": "2026-09-27",
+  "sha256": "d3e0928b75ed4cfe89e0c0f51c831524f052ea8cb2958e11425b8665733bc7a0",
+  "method": "captured live on 2026-09-27 20:55:47, 200, 1.2 MB, with curl_cffi (impersonate=chrome) from the home IP, no cookies. The page is a minimal stand-in: <title> and __NEXT_DATA__ rebuilt from the live one. Kept: props.initialState.town (cookieTownId, the first three townsHits as id and name); listing.data.bySearch recordsFiltered, pageIndex, searchKey and 6 of the 24 rows of page 0 (rows 1, 2, 9, 7, 17, 13), each cut to id, title, full_title, price, price_old, vendor, vendorcode, reviews_count, reviews_stars, seo_url, max_day, preorder, show_flag, discounted_price, bonus; page and query of __NEXT_DATA__. Dropped: filters, badges, photos, modifications and the rest of the state",
+  "ground_truth": {
+    "city": "Москва",
+    "recordsFiltered": 37,
+    "rows": {
+      "737606": "89 990, Palit NE75070019K9-GB2050S, 3 reviews 5, max_day 1, bonus 720 (bonus roubles, not a price)",
+      "730439": "146 870, 67 reviews 5, max_day 3",
+      "733488": "107 470, 125 reviews 4.8, max_day 3",
+      "739366": "91 990, no reviews, max_day 1",
+      "729177": "166 560, max_day 4",
+      "753863": "98 930, 2 reviews 4.5, max_day 3"
+    }
+  }
+}

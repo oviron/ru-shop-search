@@ -28,6 +28,7 @@ dns = ["dns-connector"]
 citilink = ["citilink-connector"]
 mvideo = ["mvideo-connector"]
 vseinstrumenti = ["vseinstrumenti-connector"]
+regard = ["regard-connector"]
 aliexpress = ["aliexpress-connector"]
 all = [
     "ozon-connector",
@@ -37,6 +38,7 @@ all = [
     "citilink-connector",
     "mvideo-connector",
     "vseinstrumenti-connector",
+    "regard-connector",
     "aliexpress-connector",
 ]
 
@@ -62,3 +64,4 @@ dns-connector = { workspace = true }
 citilink-connector = { workspace = true }
 mvideo-connector = { workspace = true }
 vseinstrumenti-connector = { workspace = true }
+regard-connector = { workspace = true }

@@ -257,6 +257,34 @@ async def test_vseinstrumenti_search_rows_become_offers(monkeypatch):
     ]
 
 
+async def test_regard_search_rows_become_offers(monkeypatch):
+    from mcp_core.pacing import Pacer
+    from mcp_core.stopgate import StopGate
+    from mcp_core.transport import impersonated
+    from mcp_core.transport.impersonated import Reply
+    from regard_connector import server as regard
+
+    fixture = Path(__file__).parents[2] / "regard-connector/tests/fixtures/search_rtx5070_live.html"
+
+    async def fake_get(url, **kwargs):
+        return Reply(200, fixture.read_text(encoding="utf-8"), None)
+
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+    monkeypatch.setattr(regard, "_pacer", Pacer(0.0, source="regard", gate=StopGate(None)))
+    regard._cache.clear()
+    monkeypatch.setattr(server, "SOURCES", {"regard": regard})
+
+    offers = await server._search_regard("rtx 5070", 2)
+
+    assert [(o.product_id, o.price_rub, o.brand, o.seller, o.rating_count, o.in_stock) for o in offers] == [
+        ("737606", 89990.0, "Palit", "Регард", 3, True),
+        ("730439", 146870.0, "Gigabyte", "Регард", 67, True),
+    ]
+    assert offers[0].url == (
+        "https://www.regard.ru/product/737606/videokarta-nvidia-geforce-rtx-5070-palit-infinity-3-12gb-ne75070019k9-gb2050s"
+    )
+
+
 # ----------------------------------------------------------------- ranking ----
 
 

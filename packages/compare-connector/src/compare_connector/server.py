@@ -79,6 +79,7 @@ _CARD_TOOL_NAMES = {
     "citilink": "citilink_card",
     "mvideo": "mvideo_card",
     "vseinstrumenti": "vseinstrumenti_card",
+    "regard": "regard_card",
     "aliexpress": "aliexpress_card",
 }
 
@@ -162,6 +163,13 @@ def _available_sources() -> dict[str, Any]:
         log_event("compare.source_unavailable", source="vseinstrumenti", error=_redact(str(exc))[:120])
 
     try:
+        from regard_connector import server as regard_server
+
+        sources["regard"] = regard_server
+    except Exception as exc:
+        log_event("compare.source_unavailable", source="regard", error=_redact(str(exc))[:120])
+
+    try:
         from aliexpress_connector import server as aliexpress_server
 
         sources["aliexpress"] = aliexpress_server
@@ -188,6 +196,7 @@ SEARCHABLE = (
     "citilink",
     "mvideo",
     "vseinstrumenti",
+    "regard",
     "aliexpress",
     "detsky_mir",
 )
@@ -706,6 +715,30 @@ async def _search_vseinstrumenti(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+async def _search_regard(query: str, limit: int) -> list[MarketOffer]:
+    """Adapt ``regard_search`` results (the site's search page over HTTP)."""
+    server = SOURCES["regard"]
+    response = await server.regard_search(query=query, limit=min(limit, 24))
+
+    offers: list[MarketOffer] = []
+    for item in (getattr(response, "items", None) or [])[:limit]:
+        offers.append(
+            MarketOffer(
+                source="regard",
+                product_id=str(item.product_id or ""),
+                title=item.title or "",
+                brand=item.brand or "",
+                seller="Регард",
+                price_rub=item.price_rub,
+                rating=item.rating,
+                rating_count=item.review_count,
+                in_stock=item.in_stock,
+                url=item.url or "",
+            )
+        )
+    return OfferBatch(offers, response)
+
+
 async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``aliexpress_search`` results (CDP tier; prices in rubles).
 
@@ -770,6 +803,7 @@ _SEARCH_IMPLS = {
     "citilink": _search_citilink,
     "mvideo": _search_mvideo,
     "vseinstrumenti": _search_vseinstrumenti,
+    "regard": _search_regard,
     "aliexpress": _search_aliexpress,
     "detsky_mir": _search_detmir,
 }
@@ -1153,6 +1187,7 @@ async def fetch_card(name: str, product_id_or_url: str, *, include_reviews: bool
             "citilink": "product_url",
             "mvideo": "product_id_or_url",
             "vseinstrumenti": "url",
+            "regard": "url",
             "aliexpress": "item_id_or_url",
         }[name]
         result = await _gated(name, lambda: tool(**{argument: product_id_or_url}))
@@ -1357,6 +1392,10 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             "vseinstrumenti": (
                 "search and cards read the site's pages over HTTP, prices for the city the site "
                 "picks by IP; a card opens only by its URL, B2B prices are never used"
+            ),
+            "regard": (
+                "search and cards read the site's pages over HTTP with Moscow prices; bonus "
+                "roubles are never price, a card opens by its URL or bare id"
             ),
             "aliexpress": (
                 "reachable only through the operator's Chrome (x5sec); a challenged session "
