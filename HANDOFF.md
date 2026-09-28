@@ -323,9 +323,13 @@
 - Ранжировать ли свежие сделки Pepper рядом с ценами магазинов. Сейчас нет, ни одна:
   цена сделки держится до срока и часто с условием в названии. Если ранжировать, то
   нужны правила: не старше N дней, не истёкшие, без условий в названии.
-- `claude -p` из сессии агента не авторизуется: «OAuth session expired and could not be
-  refreshed» (2026-09-27). `claude plugin …` и `claude mcp list` работают. Для проверки
-  скиллов в свежей сессии (шаг 9) нужен рабочий вход, возможно, `claude` → `/login`.
+- Срабатывают ли скиллы на свои фразы в свежей сессии, не проверено. `claude -p` из
+  сессии агента не авторизуется: «OAuth session expired and could not be refreshed»
+  (2026-09-27 и 2026-09-28). Проверено то, что можно без сессии модели:
+  `claude plugin validate --strict .` чист, `claude --plugin-dir . plugin details
+  ru-shop-search` видит три скилла, `claude --plugin-dir . mcp list` — сервер
+  `plugin:ru-shop-search:ru-shop-search` подключён. Нужен вход (`claude` → `/login`), после
+  него проверка — по одной фразе на скилл через `claude -p --plugin-dir .`.
 
 ## Базовая линия апстрима
 

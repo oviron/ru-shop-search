@@ -102,6 +102,8 @@
 - `wb_price_history`: недельные цены из basket `price-history.json`, хост basket берётся
   из живой карты `cdn.wbbasket.ru/api/v3/upstreams` (кэш 6 ч), без неё — из старой
   таблицы. Эндпоинты подсмотрены у SZhukovWork/wildberries-mcp (MIT), код не переносился.
+- Скиллы плагина `find-cheaper`, `avito-lot` и `honest-discount` вместо скиллов апстрима
+  по одному на коннектор.
 - `dns_price_history`: недельные цены за полгода. Вкладка открывает страницу товара,
   берёт GUID и CSRF-токен со страницы и после паузы шлёт один POST
   `/catalog/product/get-product-price-history/`. Эндпоинт подсмотрен у
