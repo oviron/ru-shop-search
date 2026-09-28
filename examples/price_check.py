@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a product's price across every available marketplace.
+"""Compare a product's price across every available marketplace except Avito (used goods, flagged IP).
 
     uv run python examples/price_check.py "стиральная машина узкая"
 
@@ -20,7 +20,8 @@ async def main(query: str) -> int:
     sources = await compare_sources()
     print(f"Marketplaces available: {', '.join(sources['searchable']) or 'none'}\n")
 
-    result = await compare_prices(query=query, per_source_limit=5)
+    shops = [name for name in sources["searchable"] if name != "avito"]
+    result = await compare_prices(query=query, per_source_limit=5, sources=shops)
 
     print(f"Query: {result.query!r}")
     print(f"Offers: {result.total_offers}   Complete: {result.complete}\n")

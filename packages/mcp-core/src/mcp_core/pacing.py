@@ -155,8 +155,8 @@ class Pacer:
             return ""
         return (
             f"{self._consecutive_refusals} refusals in a row — this is a standing block, not a blip. "
-            "Change the IP (a Russian residential or mobile address works where a datacenter one does not), "
-            "or refresh the logged-in session in the scraping profile."
+            "Wait out the stop and do not retry in a loop. A Russian residential or mobile IP works where a "
+            "datacenter one does not; the plugin's browser session is anonymous, there is no login to refresh."
         )
 
     def reset(self) -> None:

@@ -1,30 +1,12 @@
 # Примеры
 
-Скрипты, которые дёргают коннекторы напрямую, без MCP-клиента. Удобно для проверки
-установки и как заготовка для своей автоматизации.
+Скрипты, которые зовут коннекторы напрямую, без MCP-клиента: проверить установку или
+взять за основу своей автоматизации. Обычный путь — инструменты плагина, см. корневой
+README.
 
-Все они обращаются к живым маркетплейсам, поэтому нужна сеть, а для Ozon — российский
-IP или настроенный CDP.
-
-```bash
-uv run python examples/price_check.py "стиральная машина узкая"
-uv run python examples/seller_lookup.py 5535522
-uv run python examples/rating_breakdown.py "iphone 15"
-uv run python examples/health_check.py
-```
-
-Если скрипт сообщает, что маркетплейс заблокирован, для датацентрового IP это
-ожидаемо. Что происходит с каждым источником — в [docs/ANTI_BOT.md](../docs/ANTI_BOT.md).
-
----
-
-# Examples
-
-Runnable scripts that exercise the connectors directly, without an MCP client. Handy
-for verifying an install, or as a starting point for your own automation.
-
-All of them hit live marketplaces, so they need network access — and, for Ozon, a
-Russian-friendly IP or the CDP tier.
+Все скрипты ходят в живые магазины. Магазины со вкладкой (Ozon, DNS, Ситилинк и другие)
+требуют запущенного профиля: `uv run marketplace-mcp browser start`, после работы
+`uv run marketplace-mcp browser stop`. Стоп на первом отказе действует и здесь.
 
 ```bash
 uv run python examples/price_check.py "стиральная машина узкая"
@@ -33,5 +15,6 @@ uv run python examples/rating_breakdown.py "iphone 15"
 uv run python examples/health_check.py
 ```
 
-If a script reports a marketplace as blocked, that is expected from a datacenter IP —
-see [docs/ANTI_BOT.md](../docs/ANTI_BOT.md).
+`price_check.py` спрашивает все магазины с поиском, кроме Авито. `avito_search.py` идёт в
+Авито напрямую; пока домашний IP под флагом Авито, его не запускай. Что происходит с
+каждым магазином, записано в [docs/LIVE_STATUS.md](../docs/LIVE_STATUS.md).
