@@ -51,6 +51,21 @@ class DnsCardResponse(BaseModel):
     meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")
 
 
+class DnsPricePoint(BaseModel):
+    week: str = Field(description="Start of the week, ISO date; empty when the label cannot be read.")
+    label: str = Field(description="The week as DNS labels it, e.g. 13.04-19.04.")
+    price_rub: float = Field(description="Average selling price DNS shows for that week, in roubles.")
+
+
+class DnsPriceHistoryResponse(BaseModel):
+    product_id: str = Field(description="DNS product id from the URL.")
+    title: str | None = Field(default=None, description="Product title from the page.")
+    points: list[DnsPricePoint] = Field(default_factory=list, description="Weekly points, oldest first.")
+    price_range: str | None = Field(default=None, description="The range line DNS shows above the chart.")
+    url: str = Field(default="", description="Canonical product URL.")
+    meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")
+
+
 class DnsSelfcheckCheckOut(SelfCheckEntryBase):
     ok: bool | None = Field(default=None, description="Boolean health summary if applicable.")
     baseline: str = Field(default="", description="Baseline identifier used for comparison.")

@@ -1,0 +1,10 @@
+{
+  "url": "https://cdn.wbbasket.ru/api/v3/upstreams",
+  "captured_at": "2026-09-27",
+  "sha256": "b890e31b6c622e754b3bdcbe691405ed660ea493c96fbbcf704082221b998bd4",
+  "method": "captured live on 2026-09-27 23:56:41 with plain curl, no cookies or token; trimmed to origin.mediabasket_route_map groups with method range; raw_sha256 is the full body, kept outside git",
+  "ground_truth": {
+    "note": "65 hosts, vol 0..28805; vol 4453 -> basket-25.wbbasket.ru, vol 28805 -> basket-65.wbbasket.ru"
+  },
+  "raw_sha256": "da3c0b46e6868ea98dcf9dc99bcb30a4b492b29bdf6cba4c8385bfef655cd3ca"
+}

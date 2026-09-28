@@ -146,7 +146,7 @@ testpaths = [
     "packages/marketplace-connector/tests",
 ]
 asyncio_mode = "auto"
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not live and not cdp'"
 markers = [
     "live: hits real marketplace endpoints — requires network and a Russian-friendly IP (deselect with '-m \"not live\"')",
     "cdp: requires a running Chrome with remote debugging on port 9222",

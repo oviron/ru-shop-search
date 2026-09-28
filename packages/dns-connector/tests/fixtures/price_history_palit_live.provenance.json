@@ -1,0 +1,9 @@
+{
+  "url": "POST https://www.dns-shop.ru/catalog/product/get-product-price-history/ (multipart productId=b58aaa7e-00a9-11f0-92fe-0050569d5825)",
+  "captured_at": "2026-09-27",
+  "sha256": "57c7f0c40e2f417720741c426c34b2e3b63c67d3586659df067f63a099078c60",
+  "method": "captured live on 2026-09-27 23:59:57 from the plugin's anonymous Chrome tab on https://www.dns-shop.ru/product/b58aaa7e00a9d582/ (opened 23:59:49): the product GUID read from the availability block's data-products, the CSRF token from meta[name=csrf-token], then one same-origin fetch; body kept whole (public weekly prices and the site's asset list, no personal data)",
+  "ground_truth": {
+    "note": "24 weekly points in month groups; first 13.04-19.04 57 999 ₽, last 21.09-27.09 90 299 ₽ (the card showed 90 299 ₽ the same day); priceRange «от 57 999 ₽ до 90 299 ₽»; maxPeriodPrice null"
+  }
+}

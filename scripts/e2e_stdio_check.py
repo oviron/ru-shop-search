@@ -24,7 +24,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-EXPECTED_TOOLS = {"marketplace-mcp": {"search", "card", "shops", "avito_evaluate"}}
+EXPECTED_TOOLS = {"marketplace-mcp": {"search", "compare", "card", "price_history", "shops", "avito_evaluate"}}
 EXPECTED_INSTALLED = {
     "wildberries",
     "ozon",

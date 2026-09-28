@@ -64,6 +64,18 @@ class WbRootInfoResponse(BaseModel):
     meta: MetaOut = Field(default_factory=MetaOut, description="Validation metadata.")
 
 
+class WbPricePoint(BaseModel):
+    week: str = Field(description="Start of the week, ISO date.")
+    price_rub: float = Field(description="The week's price WB publishes for the card, in roubles.")
+
+
+class WbPriceHistoryResponse(BaseModel):
+    nm_id: int = Field(description="The SKU.")
+    points: list[WbPricePoint] = Field(default_factory=list, description="Weekly points, oldest first.")
+    host_used: str = Field(default="", description="Basket CDN host used.")
+    meta: MetaOut = Field(default_factory=MetaOut, description="Validation metadata.")
+
+
 class WbReviewItem(BaseModel):
     rating: int | None = Field(default=None, description="Review rating 1..5.")
     text: str = Field(default="", description="Review text (mojibake-decoded, max 1500 chars).")

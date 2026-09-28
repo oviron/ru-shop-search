@@ -29,6 +29,7 @@ import math
 import os
 import re
 import string
+import time
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
@@ -66,6 +67,8 @@ from wb_connector.models_output import (
     WbCategoryNode,
     WbCategoryProductsResponse,
     WbNoResultsResponse,
+    WbPriceHistoryResponse,
+    WbPricePoint,
     WbQuestionItem,
     WbQuestionsResponse,
     WbReviewItem,
@@ -384,7 +387,7 @@ def _note_result(url: str, result: tuple[int, str | None, str | None]) -> None:
     if err is None and status == 200 and text is not None and not _is_edge_wall(text):
         _pacer.record_success()
         _cache.set(url, result)
-    elif err is None and (status in _REFUSAL_STATUSES or _is_edge_wall(text)):
+    elif err is None and (status in _REFUSAL_STATUSES or (status == 200 and _is_edge_wall(text))):
         _pacer.record_refusal(f"http {status}")
 
 
@@ -434,6 +437,43 @@ def _basket_for_sku(nm_id: int) -> str:
             return f"basket-{nn}.wbbasket.ru"
     log_event("wb.basket_fallback_used", vol=vol, fallback=get_settings().basket_fallback)
     return f"{get_settings().basket_fallback}.wbbasket.ru"
+
+
+ROUTES_URL = "https://cdn.wbbasket.ru/api/v3/upstreams"
+_ROUTES_TTL_S = 6 * 3600
+_routes: tuple[float, list[tuple[int, int, str]]] | None = None
+
+
+def _parse_routes(text: str | None) -> list[tuple[int, int, str]]:
+    try:
+        groups = json.loads(text or "")["origin"]["mediabasket_route_map"]
+        return [
+            (int(h["vol_range_from"]), int(h["vol_range_to"]), str(h["host"]))
+            for g in groups
+            if g.get("method") in (None, "range")
+            for h in g["hosts"]
+        ]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return []
+
+
+async def _basket_host(nm_id: int) -> str:
+    """Basket host from WB's published route map (cached 6 h); the static table if it is unavailable."""
+    global _routes
+    vol = nm_id // 100000
+    if _routes is None or time.monotonic() - _routes[0] > _ROUTES_TTL_S:
+        await _polite_wait()
+        async with _wb_client() as client:
+            status, text, err = await _safe_get_text(client, ROUTES_URL)
+        table = _parse_routes(text) if status == 200 and not err else []
+        if table:
+            _routes = (time.monotonic(), table)
+        else:
+            log_event("wb.route_map_unavailable", status=status)
+    for low, high, host in _routes[1] if _routes else []:
+        if low <= vol <= high:
+            return host
+    return _basket_for_sku(nm_id)
 
 
 def _decode_mojibake(s: object) -> str:
@@ -772,6 +812,71 @@ async def wb_card(
 
 
 @mcp.tool(
+    name="wb_price_history",
+    annotations=ToolAnnotations(
+        title="WB Price History", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    ),
+)
+async def wb_price_history(
+    nm_id: Annotated[int, Field(gt=0, description="nmId (positive integer) of the SKU.")],
+) -> WbPriceHistoryResponse:
+    """Weekly prices WB publishes for a card on its basket CDN (price-history.json).
+
+    ## Return Format
+
+    WbPriceHistoryResponse: {nm_id, points: [{week, price_rub}], host_used, meta}.
+    Points are oldest first; the last one is a past week, not the current price.
+
+    ## Error Format
+
+    ToolError: not_found when WB keeps no history for the SKU; transport_down with
+    status_code on any other HTTP answer (401/403/429 also stop WB); parser_drift on
+    a body that is not a list of points.
+    """
+    log_event("wb_price_history.start", nm_id=nm_id)
+    try:
+        host = await _basket_host(nm_id)
+        url = f"https://{host}/vol{nm_id // 100000}/part{nm_id // 1000}/{nm_id}/info/price-history.json"
+        await _polite_wait()
+        async with _wb_client() as client:
+            status, text, err = await _safe_get_text(client, url)
+        if status == 404:
+            raise_tool_error(NotFoundError(f"WB keeps no price history for nm_id={nm_id}", provider="wb"))
+        if status != 200 or err:
+            if status in _REFUSAL_STATUSES:
+                _pacer.record_refusal(f"http {status}")
+            raise_tool_error(
+                TransportDownError(f"price history HTTP {status or err}", provider="wb", status_code=status or None)
+            )
+        try:
+            raw = json.loads(text or "")
+        except json.JSONDecodeError as exc:
+            raise_tool_error(ParserDriftError(f"price history is not JSON: {exc}", provider="wb"))
+        if not isinstance(raw, list):
+            raise_tool_error(ParserDriftError("price history is not a list of points", provider="wb"))
+        points = []
+        for point in raw:
+            kopecks = R.coerce_price((point.get("price") or {}).get("RUB")) if isinstance(point, dict) else None
+            stamp = point.get("dt") if isinstance(point, dict) else None
+            if kopecks is None or isinstance(stamp, bool) or not isinstance(stamp, int):
+                continue
+            week = datetime.datetime.fromtimestamp(stamp, datetime.UTC).date().isoformat()
+            points.append(WbPricePoint(week=week, price_rub=round(kopecks / 100, 2)))
+        _pacer.record_success()
+        log_event("wb_price_history.done", nm_id=nm_id, points=len(points))
+        return WbPriceHistoryResponse(
+            nm_id=nm_id, points=points, host_used=host, meta=MetaOut(source="wb_price_history", healthy=True)
+        )
+    except ToolError:
+        raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
+    except Exception as exc:
+        log_event("wb_price_history.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
+        raise_tool_error(TransportDownError(_redact(str(exc)), provider="wb"))
+
+
+@mcp.tool(
     name="wb_root_info",
     annotations=ToolAnnotations(
         title="WB Root Info (imt_id)",
@@ -810,7 +915,7 @@ async def wb_root_info(
     if ctx is not None:
         await ctx.info(f"wb_root_info: nm_id={nm_id}")
 
-    host = _basket_for_sku(nm_id)
+    host = await _basket_host(nm_id)
     vol = nm_id // 100000
     part = nm_id // 1000
     url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"

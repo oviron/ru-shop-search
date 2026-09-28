@@ -53,6 +53,8 @@ from pydantic import Field
 
 from dns_connector.models_output import (
     DnsCardResponse,
+    DnsPriceHistoryResponse,
+    DnsPricePoint,
     DnsSearchItemOut,
     DnsSearchResponse,
     DnsSelfcheckResponse,
@@ -569,6 +571,171 @@ async def dns_card(
     except Exception as exc:
         log_event("dns_card.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
         raise_tool_error(TransportDownError(_redact(f"dns_card failed: {exc}")))
+
+
+_HISTORY_PAGE_JS = """
+() => {
+    let guid = null;
+    try {
+        guid = JSON.parse(document.querySelector('[data-products]').getAttribute('data-products'))[0].id || null;
+    } catch (e) {}
+    const h1 = document.querySelector('h1');
+    return JSON.stringify({guid: guid, title: document.title || '', h1: h1 ? h1.textContent.trim() : null});
+}
+"""
+
+_HISTORY_FETCH_JS = """
+async (guid) => {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    const body = new FormData();
+    body.append('productId', guid);
+    const r = await fetch('/catalog/product/get-product-price-history/', {
+        method: 'POST', body: body, credentials: 'same-origin',
+        headers: {'X-CSRF-Token': meta ? meta.content : '', 'X-Requested-With': 'XMLHttpRequest',
+                  'Accept': 'application/json, text/javascript, */*; q=0.01'}});
+    return JSON.stringify({status: r.status, text: (await r.text()).slice(0, 500000)});
+}
+"""
+_WEEK_RE = re.compile(r"^(\d{2})\.(\d{2})-\d{2}\.\d{2}$")
+
+
+def _today() -> datetime.date:
+    return datetime.date.today()
+
+
+def _iso_weeks(labels: list[str], today: datetime.date) -> list[str]:
+    """Week starts for DNS labels without a year: the newest week is this year, walking back across New Year."""
+    out: list[str] = []
+    year, later_month = today.year, today.month
+    for label in reversed(labels):
+        m = _WEEK_RE.match(label)
+        if not m:
+            out.append("")
+            continue
+        day, month = int(m.group(1)), int(m.group(2))
+        if month > later_month:
+            year -= 1
+        later_month = month
+        try:
+            out.append(datetime.date(year, month, day).isoformat())
+        except ValueError:
+            out.append("")
+    return out[::-1]
+
+
+async def _history_render(url: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One tab on the product page, then, after a pause, one same-origin POST for its price history."""
+    async with _cdp_lock:
+        try:
+            await _polite_wait()
+        except SourceStoppedError as exc:
+            raise_tool_error(exc)
+        try:
+            async with open_page(url, wait_ms=0, challenge_grace_s=_CHALLENGE_GRACE_S) as page:
+                deadline = asyncio.get_running_loop().time() + _PRICE_WAIT_MS / 1000
+                while True:
+                    info = _parse_extract(await asyncio.wait_for(page.evaluate(_HISTORY_PAGE_JS), timeout=30.0))
+                    if info.get("guid") or asyncio.get_running_loop().time() >= deadline:
+                        break
+                    await asyncio.sleep(0.5)
+                if not info.get("guid"):
+                    if "доступ ограничен" in str(info.get("title") or "").lower():
+                        _pacer.record_refusal("access-restricted page")
+                        raise_tool_error(_blocked(403))
+                    raise_tool_error(ParserDriftError("no product GUID on the DNS page (data-products moved?)"))
+                try:
+                    await _polite_wait()
+                except SourceStoppedError as exc:
+                    raise_tool_error(exc)
+                answer = _parse_extract(
+                    await asyncio.wait_for(page.evaluate(_HISTORY_FETCH_JS, info["guid"]), timeout=30.0)
+                )
+        except NavBlocked as exc:
+            if exc.status in _REFUSAL_STATUSES:
+                _pacer.record_refusal(f"http {exc.status}")
+                raise_tool_error(_blocked(exc.status))
+            raise_tool_error(TransportDownError(f"DNS page failed (HTTP {exc.status})", status_code=exc.status))
+    status = answer.get("status")
+    if status in _REFUSAL_STATUSES:
+        _pacer.record_refusal(f"history http {status}")
+        raise_tool_error(_blocked(status))
+    if status != 200:
+        raise_tool_error(TransportDownError(f"DNS price history HTTP {status}", status_code=status or None))
+    try:
+        body = json.loads(str(answer.get("text") or ""))
+    except json.JSONDecodeError:
+        raise_tool_error(ParserDriftError("DNS price history is not JSON"))
+    data = body.get("data") if isinstance(body, dict) and body.get("result") else None
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+        raise_tool_error(ParserDriftError("DNS price history has no data.groups"))
+    _pacer.record_success()
+    return info, data
+
+
+@mcp.tool(
+    name="dns_price_history",
+    annotations=ToolAnnotations(
+        title="DNS-Shop Price History",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def dns_price_history(
+    product_url: Annotated[
+        str, Field(min_length=1, max_length=400, description="dns-shop.ru product URL containing /product/<id>/.")
+    ],
+) -> DnsPriceHistoryResponse:
+    """Weekly average selling prices DNS shows on a product card (about half a year).
+
+    ## Return Format
+
+    DnsPriceHistoryResponse: {product_id, title, points: [{week, label, price_rub}],
+    price_range, url, meta}. Oldest first; the last week is the current, unfinished one.
+
+    ## Error Format
+
+    ToolError: bad_request for a URL without a product id; transport_down with
+    status_code when DNS refuses the tab or the request (401/403/429 stop DNS);
+    parser_drift when the page has no product GUID or the answer has no weeks.
+    """
+    log_event("dns_price_history.start", input=product_url[:80])
+    try:
+        product_id = _extract_product_id(product_url)
+        if product_id is None:
+            raise_tool_error(BadRequestError(f"could not extract a product id from {product_url!r}"))
+        url = f"{SITE_BASE}/product/{product_id}/"
+        info, data = await _history_render(url)
+        labels, prices = [], []
+        for group in data["groups"]:
+            for point in group.get("points") or [] if isinstance(group, dict) else []:
+                price = R.coerce_price(point.get("priceNum")) if isinstance(point, dict) else None
+                if price:
+                    labels.append(str(point.get("label") or ""))
+                    prices.append(price)
+        weeks = _iso_weeks(labels, _today())
+        points = [
+            DnsPricePoint(week=w, label=lab, price_rub=p) for w, lab, p in zip(weeks, labels, prices, strict=True)
+        ]
+        range_text = data.get("priceRange")
+        result = DnsPriceHistoryResponse(
+            product_id=product_id,
+            title=R.flatten_text(info.get("h1")),
+            points=points,
+            price_range=range_text if isinstance(range_text, str) else None,
+            url=url,
+        )
+        result.meta = MetaOut(source="dns_price_history", healthy=True)
+        log_event("dns_price_history.done", product_id=product_id, points=len(points))
+        return result
+    except ToolError:
+        raise
+    except ConnectorError as exc:
+        raise_tool_error(exc)
+    except Exception as exc:
+        log_event("dns_price_history.error", error=_redact(str(exc)), exc_type=type(exc).__name__)
+        raise_tool_error(TransportDownError(_redact(f"dns_price_history failed: {exc}")))
 
 
 # CLI-only drift canary: ``marketplace-mcp doctor`` imports and calls dns_selfcheck()

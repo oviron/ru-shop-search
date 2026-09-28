@@ -1,0 +1,9 @@
+{
+  "url": "https://basket-25.wbbasket.ru/vol4453/part445317/445317378/info/price-history.json",
+  "captured_at": "2026-09-27",
+  "sha256": "4eb552c0d4270fe64588c18f165d98a350af2bc2465c3d8f9390b59ce3295bb4",
+  "method": "captured live on 2026-09-27 23:56:58 with plain curl, no cookies or token; body kept whole (public weekly prices, no personal data)",
+  "ground_truth": {
+    "note": "nm 445317378 (Gigabyte RTX 5070 from search_v18_live.json): 8 weekly points, dt is a Unix timestamp of the week start, price.RUB in kopecks; first 2026-06-28 31 617 ₽, last 2026-09-13 67 089 ₽"
+  }
+}

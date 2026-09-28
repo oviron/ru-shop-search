@@ -104,7 +104,10 @@ class SourceOutcome(BaseModel):
     source: str = Field(default="", description="Marketplace name.")
     status: str = Field(
         default="",
-        description="ok, blocked (anti-bot or rate limit), timeout, error, or not_installed.",
+        description=(
+            "ok, blocked (the shop refused: 401/403/418/429, captcha or anti-bot page, or it is stopped "
+            "after such a refusal), timeout, error (5xx, crashed tab, parse failure) or not_installed."
+        ),
     )
     detail: str = Field(default="", description="Human-readable outcome detail; the error text when it failed.")
     warnings: list[str] = Field(
@@ -158,3 +161,33 @@ class CompareResponse(BaseModel):
     )
     warnings: list[str] = Field(default_factory=list, description="Connector-level warnings (partial data, no prices).")
     server_version: str = Field(default="", description="Connector version.")
+
+
+class ModelGroup(BaseModel):
+    """Offers from different shops that describe one model, with how sure the match is."""
+
+    confidence: str = Field(
+        description=(
+            "exact: the same valid GTIN, or the same brand and manufacturer part number; "
+            "likely: the same model code in the titles or a typed part number; "
+            "possible: the same Latin words and numbers in the titles, colours and wording aside."
+        )
+    )
+    basis: str = Field(description="gtin, brand_mpn, title_code or title_words.")
+    key: str = Field(description="The value the offers share: GTIN-14, brand:mpn, model code or word set.")
+    sources: list[str] = Field(description="Shops in this model, at least two.")
+    cheapest: MarketOffer = Field(description="Lowest everyday price within the model.")
+    price_spread_rub: float = Field(description="Highest minus lowest price within the model.")
+    offers: list[MarketOffer] = Field(description="The model's offers, cheapest first.")
+
+
+class ModelCompareResponse(CompareResponse):
+    """A price comparison plus the models found in more than one shop."""
+
+    models: list[ModelGroup] = Field(
+        default_factory=list,
+        description=(
+            "One model from several shops, strongest evidence first. New goods priced in roubles only: "
+            "Avito ads, used or display units, accessories and deal posts are left out."
+        ),
+    )

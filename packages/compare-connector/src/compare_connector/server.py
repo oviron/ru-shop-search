@@ -52,7 +52,15 @@ from mcp_core.source_selection import selected
 from mcp_core.stopgate import SourceStoppedError, default_gate, is_refusal
 from pydantic import Field
 
-from compare_connector.identity import ProductIdentity, identity_from_mapping, match_product_identity
+from compare_connector.identity import (
+    ProductIdentity,
+    identity_from_mapping,
+    match_product_identity,
+    normalize_gtin,
+)
+from compare_connector.matching import CLASSIFIEDS, comparable
+from compare_connector.matching import looks_like_an_accessory as _looks_like_an_accessory
+from compare_connector.matching import looks_like_another_condition as _looks_like_another_condition
 from compare_connector.models_output import (
     CompareResponse,
     DealInfo,
@@ -255,85 +263,6 @@ def _dedupe(offers: Iterable[MarketOffer]) -> list[MarketOffer]:
         seen.add(key)
         out.append(offer)
     return out
-
-
-# Words that mark a listing as something you buy *for* a product rather than
-# the product itself. A search for "iphone 15" matches a case, a screen
-# protector and a cable, all of them cheaper than the phone, and whichever is
-# cheapest becomes the headline answer. Observed live in July 2026: a query for
-# iPhone 15 ranked a 34 224 ₽ listing above genuine 52 049 ₽ ones.
-_ACCESSORY_MARKERS = (
-    "чехол",
-    "чехол-книжка",
-    "бампер",
-    "накладка",
-    "защитное стекло",
-    "стекло",
-    "плёнка",
-    "пленка",
-    "кабель",
-    "адаптер",
-    "зарядка",
-    "зарядное",
-    "держатель",
-    "ремешок",
-    "подставка",
-    "наклейка",
-    "case",
-    "cover",
-    "screen protector",
-    "cable",
-    "charger",
-    "strap",
-)
-
-
-# Words that mark a listing as a different *condition* of the product, not a
-# different product. This is the case the accessory list above misses entirely
-# and the one that actually bit: checked live in July 2026, the cheap iPhone 15
-# rows on Wildberries were "Восстановленный" and "Витринный образец" — a
-# refurbished phone and a display unit, ranked against new ones from other
-# marketplaces. Nothing in the title looks like an accessory, and the price is
-# not low enough to trip a median check. Only the wording gives it away.
-_CONDITION_MARKERS = (
-    "восстановленный",
-    "восстановленная",
-    "витринный образец",
-    "витринный",
-    "уценка",
-    "уценённый",
-    "уцененный",
-    "б/у",
-    "бывший в употреблении",
-    "как новый",
-    "refurbished",
-    "renewed",
-    "pre-owned",
-    "used",
-    "open box",
-)
-
-
-def _looks_like_another_condition(title: str, query: str) -> bool:
-    """Whether a title advertises a used, refurbished or display unit.
-
-    A query that asks for one of these is answered correctly by them, so a
-    marker present in the query itself never counts.
-    """
-    low_title = title.lower()
-    low_query = query.lower()
-    return any(m in low_title and m not in low_query for m in _CONDITION_MARKERS)
-
-
-def _looks_like_an_accessory(title: str, query: str) -> bool:
-    """Whether a title reads as an accessory the query did not ask for.
-
-    Asking for a case and getting cases is correct, so a marker present in the
-    query itself never counts.
-    """
-    low_title = title.lower()
-    low_query = query.lower()
-    return any(m in low_title and m not in low_query for m in _ACCESSORY_MARKERS)
 
 
 def _relevance_warnings(query: str, priced: list[MarketOffer]) -> list[str]:
@@ -757,6 +686,7 @@ async def _search_regard(query: str, limit: int) -> list[MarketOffer]:
                 rating_count=item.review_count,
                 in_stock=item.in_stock,
                 url=item.url or "",
+                identity=ProductIdentity(brand=item.brand or "", mpn=item.part_number or "", source="regard"),
             )
         )
     return OfferBatch(offers, response)
@@ -883,6 +813,11 @@ async def _search_detmir(query: str, limit: int) -> list[MarketOffer]:
                 rating_count=item.review_count,
                 in_stock=item.availability == "AVAILABLE" if item.availability else None,
                 url=item.url or "",
+                identity=ProductIdentity(
+                    brand=item.brand or "",
+                    gtin=next((code for code in item.barcodes if normalize_gtin(code)), ""),
+                    source="detsky_mir",
+                ),
             )
         )
     return OfferBatch(offers, response)
@@ -910,8 +845,7 @@ _SEARCH_IMPLS = {
 def _source_error(exc: Exception) -> dict[str, Any]:
     """Preserve typed recovery signals before truncating/redacting error detail.
 
-    Only connector exceptions and MCP ToolError envelopes carry this contract.
-    Arbitrary upstream text must not become an instruction to the client.
+    blocked means the shop refused (is_refusal) or is stopped; 5xx and a crashed tab are errors.
     """
     payload: dict[str, Any] = {}
     if isinstance(exc, ConnectorError):
@@ -928,17 +862,11 @@ def _source_error(exc: Exception) -> dict[str, Any]:
     try:
         code = ErrorCode(raw_code if isinstance(raw_code, str) else "")
     except (ValueError, TypeError):
-        detail = _redact(str(exc))[:200]
-        return {
-            "status": "blocked"
-            if any(word in detail for word in ("transport_down", "rate_limited", "403"))
-            else "error",
-            "detail": detail,
-        }
+        return {"status": "error", "detail": _redact(str(exc))[:200]}
 
     challenge_type = payload.get("challenge_type")
     status = "error"
-    if code in (ErrorCode.CHALLENGE_REQUIRED, ErrorCode.RATE_LIMITED, ErrorCode.TRANSPORT_DOWN):
+    if is_refusal(exc) or payload.get("source_stopped"):
         status = "blocked"
     elif code == ErrorCode.TIMEOUT:
         status = "timeout"
@@ -1155,12 +1083,8 @@ async def compare_prices(
     failed_sources = [outcome.source for outcome in outcomes if outcome.status != "ok"]
 
     cheapest = priced[0] if priced else None
-    comparable = [
-        offer
-        for offer in priced
-        if not _looks_like_an_accessory(offer.title, text) and not _looks_like_another_condition(offer.title, text)
-    ]
-    cheapest_comparable = comparable[0] if comparable else None
+    like_for_like = [offer for offer in priced if comparable(offer, text)]
+    cheapest_comparable = like_for_like[0] if like_for_like else None
     price_spread = None
     if len(priced) >= 2:
         low, high = priced[0].price_rub, priced[-1].price_rub
@@ -1186,11 +1110,13 @@ async def compare_prices(
     warnings.extend(_relevance_warnings(text, priced))
     if cheapest is not None and cheapest_comparable is not None and cheapest is not cheapest_comparable:
         warnings.append(
-            "comparable_price: the raw cheapest listing is an accessory or different condition; "
-            "cheapest_comparable is the safer like-for-like candidate"
+            "comparable_price: the raw cheapest listing is an accessory, a different condition or a classified ad "
+            f"({', '.join(sorted(CLASSIFIEDS))}, usually used); cheapest_comparable is the safer like-for-like candidate"
         )
     elif cheapest is not None and cheapest_comparable is None:
-        warnings.append("comparable_price: every priced listing looks like an accessory or different condition")
+        warnings.append(
+            "comparable_price: every priced listing looks like an accessory, a different condition or a classified ad"
+        )
     if foreign:
         currencies = ", ".join(sorted({offer.currency for offer in foreign}))
         warnings.append(

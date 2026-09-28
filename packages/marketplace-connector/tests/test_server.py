@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from compare_connector.models_output import CompareResponse
+from compare_connector.models_output import CompareResponse, MarketOffer
 from fastmcp.exceptions import ToolError
 from marketplace_connector import server
 from mcp_core.stopgate import default_gate
@@ -12,7 +12,7 @@ from mcp_core.stopgate import default_gate
 async def test_only_plugin_tools_are_exposed():
     names = {tool.name for tool in await server.mcp.list_tools()}
 
-    assert names == {"search", "card", "shops", "avito_evaluate"}
+    assert names == {"search", "compare", "card", "price_history", "shops", "avito_evaluate"}
 
 
 async def test_search_delegates_to_the_fan_out(monkeypatch):
@@ -28,6 +28,43 @@ async def test_search_delegates_to_the_fan_out(monkeypatch):
 
     assert result.query == "rtx 5070"
     assert seen["sources"] == ["dns"] and seen["per_source_limit"] == 3
+
+
+async def test_compare_groups_the_same_model_from_different_shops(monkeypatch):
+    seen = {}
+
+    async def fake(**kwargs):
+        seen.update(kwargs)
+        offers = [
+            MarketOffer(source="regard", title="Palit RTX 5070 Infinity 3 (NE75070019K9-GB2050S)", price_rub=61500.0),
+            MarketOffer(
+                source="dns", title="Palit GeForce RTX 5070 Infinity 3 [NE75070019K9-GB2050S]", price_rub=62999.0
+            ),
+            MarketOffer(
+                source="mvideo", title="Palit RTX 5070 INFINITY 3 OC [ne75070s19k9-gb2050s]", price_rub=64999.0
+            ),
+        ]
+        return CompareResponse(query=kwargs["query"], offers=offers, total_offers=3)
+
+    monkeypatch.setattr(server.compare, "compare_prices", fake)
+
+    result = await server.compare_models(query="rtx 5070", shops=["dns", "regard", "mvideo"], per_shop=3)
+
+    assert seen["sources"] == ["dns", "regard", "mvideo"] and seen["per_source_limit"] == 3
+    assert result.total_offers == 3
+    assert [(m.confidence, m.sources) for m in result.models] == [("likely", ["dns", "regard"])]
+
+
+async def test_compare_says_when_no_model_matched(monkeypatch):
+    async def fake(**kwargs):
+        return CompareResponse(query=kwargs["query"], offers=[MarketOffer(source="dns", title="x", price_rub=1.0)])
+
+    monkeypatch.setattr(server.compare, "compare_prices", fake)
+
+    result = await server.compare_models(query="rtx 5070")
+
+    assert result.models == []
+    assert any(w.startswith("no_model_match") for w in result.warnings)
 
 
 async def test_card_rejects_an_unknown_shop():

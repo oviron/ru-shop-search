@@ -187,6 +187,95 @@
       "type": "object"
     }
   },
+  "compare": {
+    "output": {
+      "properties": {
+        "cheapest": {},
+        "cheapest_comparable": {},
+        "complete": {},
+        "models": {},
+        "offers": {},
+        "price_spread_rub": {},
+        "query": {},
+        "server_version": {},
+        "source_outcomes": {},
+        "sources_ok": {},
+        "sources_queried": {},
+        "total_offers": {},
+        "warnings": {}
+      },
+      "type": "object"
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "in_stock_only": {
+          "default": false,
+          "type": "boolean"
+        },
+        "per_shop": {
+          "default": 10,
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "maxLength": 200,
+          "minLength": 2,
+          "type": "string"
+        },
+        "shops": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  "price_history": {
+    "output": {
+      "properties": {
+        "notes": {},
+        "product": {},
+        "shop": {},
+        "shop_history": {},
+        "snapshots": {},
+        "summary": {}
+      },
+      "type": "object"
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "shop": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shop",
+        "product"
+      ],
+      "type": "object"
+    }
+  },
   "search": {
     "output": {
       "properties": {

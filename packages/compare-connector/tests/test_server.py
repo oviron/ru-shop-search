@@ -16,7 +16,15 @@ from compare_connector import server
 from compare_connector.models_output import MarketOffer
 from fastmcp.exceptions import ToolError
 from mcp_core import resilience as R
-from mcp_core.errors import ChallengeRequiredError, ParserDriftError, RateLimitedError, raise_tool_error
+from mcp_core.errors import (
+    ChallengeRequiredError,
+    ParserDriftError,
+    PermissionDeniedError,
+    RateLimitedError,
+    TransportDownError,
+    raise_tool_error,
+)
+from mcp_core.stopgate import SourceStoppedError
 from pydantic import ValidationError
 
 
@@ -505,7 +513,7 @@ async def test_one_source_failing_does_not_sink_the_comparison(monkeypatch):
     assert result.complete is False
     assert result.sources_ok == ["wildberries"]
     outcomes = {o.source: o for o in result.source_outcomes}
-    assert outcomes["ozon"].status == "blocked"
+    assert outcomes["ozon"].status == "error"
     assert any("partial" in w for w in result.warnings)
 
 
@@ -581,6 +589,29 @@ def test_structured_error_code_takes_precedence_over_message(error, status, code
 def test_malformed_error_envelope_does_not_break_comparison(message):
     result = server._source_error(ToolError(message))
     assert result["status"] == "error"
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (TransportDownError("bad gateway", provider="dns", status_code=502), "error"),
+        (TransportDownError("tab crashed", provider="dns"), "error"),
+        (TransportDownError("forbidden", provider="dns", status_code=403), "blocked"),
+        (TransportDownError("too many", provider="dns", status_code=429), "blocked"),
+        (PermissionDeniedError("denied"), "blocked"),
+        (ChallengeRequiredError("captcha", provider="dns"), "blocked"),
+        (SourceStoppedError("dns", reason="429", retry_after_s=60), "blocked"),
+    ],
+)
+@pytest.mark.parametrize("wire", [False, True])
+def test_only_a_shop_refusal_is_blocked(error, status, wire):
+    raised = ToolError(json.dumps(error.to_dict())) if wire else error
+    assert server._source_error(raised)["status"] == status
+
+
+@pytest.mark.parametrize("message", ['{"error": "transport_down"} 403', "rate_limited by upstream", "HTTP 403"])
+def test_unstructured_text_never_reads_as_a_block(message):
+    assert server._source_error(RuntimeError(message))["status"] == "error"
 
 
 def test_challenge_metadata_does_not_leak_credentials_or_upstream_instructions():
@@ -1339,6 +1370,22 @@ async def test_comparison_exposes_like_for_like_candidate(monkeypatch):
     assert result.cheapest.source == "wildberries"
     assert result.cheapest_comparable.source == "ozon"
     assert any(w.startswith("comparable_price:") for w in result.warnings)
+
+
+async def test_a_used_classified_ad_is_never_the_like_for_like_candidate(monkeypatch):
+    async def avito(query, limit):
+        return [offer("avito", 30000.0, title="Apple iPhone 15 128GB")]
+
+    async def ozon(query, limit):
+        return [offer("ozon", 52049.0, title="Apple iPhone 15 128GB")]
+
+    stub_sources(monkeypatch, {"avito": avito, "ozon": ozon})
+
+    result = await server.compare_prices(query="iphone 15")
+
+    assert result.cheapest.source == "avito"
+    assert result.cheapest_comparable.source == "ozon"
+    assert any(w.startswith("comparable_price:") and "classified" in w for w in result.warnings)
 
 
 async def test_comparable_candidate_is_none_when_everything_is_suspicious(monkeypatch):
