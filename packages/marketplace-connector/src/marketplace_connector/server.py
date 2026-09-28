@@ -27,6 +27,7 @@ from mcp.types import ToolAnnotations
 from mcp_core.errors import BadRequestError, ConnectorError, raise_tool_error
 from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
+from mcp_core.source_selection import selected, wanted
 from mcp_core.stopgate import default_gate
 from pydantic import BaseModel, Field
 
@@ -97,13 +98,22 @@ async def _remember(response: CompareResponse) -> None:
         log_event("snapshots.write_failed", error=type(exc).__name__)
 
 
+def _default_shops(shops: list[str] | None) -> list[str] | None:
+    """Авито — рынок объявлений, а не магазин: в общий поиск идёт только по явному имени."""
+    if shops:
+        return shops
+    chosen = selected()
+    return [key for key in compare.SEARCHABLE if key != "avito" and wanted(key, chosen)]
+
+
 @mcp.tool(name="search", annotations=_READ_ONLY)
 async def search(
     query: Annotated[
         str, Field(min_length=2, max_length=200, description="Что искать, по-русски: «rtx 5070», «iphone 15 128».")
     ],
     shops: Annotated[
-        list[str] | None, Field(default=None, description="Ключи магазинов из shops; пусто — все с поиском.")
+        list[str] | None,
+        Field(default=None, description="Ключи магазинов из shops; пусто — все с поиском, кроме Авито."),
     ] = None,
     per_shop: Annotated[int, Field(default=5, ge=1, le=20, description="Сколько предложений брать из магазина.")] = 5,
     in_stock_only: Annotated[
@@ -130,7 +140,7 @@ async def search(
     отказ отдельного магазина не поднимает ошибку, а попадает в source_outcomes.
     """
     response = await compare.compare_prices(
-        query=query, per_source_limit=per_shop, sources=shops, in_stock_only=in_stock_only, ctx=ctx
+        query=query, per_source_limit=per_shop, sources=_default_shops(shops), in_stock_only=in_stock_only, ctx=ctx
     )
     await _remember(response)
     return response
@@ -143,7 +153,8 @@ async def compare_models(
         Field(min_length=2, max_length=200, description="Модель, по-русски или кодом: «rtx 5070 palit infinity 3»."),
     ],
     shops: Annotated[
-        list[str] | None, Field(default=None, description="Ключи магазинов из shops; пусто — все с поиском.")
+        list[str] | None,
+        Field(default=None, description="Ключи магазинов из shops; пусто — все с поиском, кроме Авито."),
     ] = None,
     per_shop: Annotated[int, Field(default=10, ge=1, le=20, description="Сколько предложений брать из магазина.")] = 10,
     in_stock_only: Annotated[
@@ -169,7 +180,7 @@ async def compare_models(
     отказ отдельного магазина не поднимает ошибку, а попадает в source_outcomes.
     """
     response = await compare.compare_prices(
-        query=query, per_source_limit=per_shop, sources=shops, in_stock_only=in_stock_only, ctx=ctx
+        query=query, per_source_limit=per_shop, sources=_default_shops(shops), in_stock_only=in_stock_only, ctx=ctx
     )
     await _remember(response)
     models = group_offers(response.offers, response.query or query)

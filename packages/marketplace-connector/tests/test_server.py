@@ -87,3 +87,24 @@ async def test_shops_lists_all_fifteen_with_stop_state(monkeypatch):
     monkeypatch.setattr(server.compare, "SOURCES", {k: v for k, v in server.compare.SOURCES.items() if k != "pepper"})
     by_key = {shop.key: shop for shop in (await server.shops()).shops}
     assert by_key["pepper"].installed is False
+
+
+@pytest.mark.parametrize("tool", ["search", "compare_models"])
+async def test_avito_is_searched_only_when_named(monkeypatch, tool):
+    seen = []
+
+    async def fake(**kwargs):
+        seen.append(kwargs["sources"])
+        return CompareResponse(query=kwargs["query"])
+
+    monkeypatch.setattr(server.compare, "compare_prices", fake)
+    monkeypatch.delenv("MARKETPLACE_SOURCES", raising=False)
+
+    await getattr(server, tool)(query="rtx 5070")
+    await getattr(server, tool)(query="rtx 5070", shops=["avito"])
+    monkeypatch.setenv("MARKETPLACE_SOURCES", "wildberries,avito")
+    await getattr(server, tool)(query="rtx 5070")
+
+    assert "avito" not in seen[0] and {"wildberries", "pepper", "dns"} <= set(seen[0])
+    assert seen[1] == ["avito"]
+    assert seen[2] == ["wildberries"]
