@@ -25,6 +25,18 @@ claude plugin marketplace add ~/Developer/oviron/ru-shop-search
 claude plugin install ru-shop-search@ru-shop-search
 ```
 
+Сервер плагина запускается прямо из этого каталога (так показывает `claude mcp list`), а
+установка ещё копирует каталог в `~/.claude/plugins/cache` и запоминает коммит. После
+новых коммитов переустанови плагин и начни новую сессию:
+
+```bash
+claude plugin uninstall ru-shop-search@ru-shop-search
+```
+
+```bash
+claude plugin install ru-shop-search@ru-shop-search
+```
+
 Плагин поднимает один MCP-сервер (`uv run marketplace-mcp`). Магазинам, которые пускают
 только браузер, нужен отдельный анонимный профиль Chrome с CDP на `127.0.0.1`. Сервер
 запускает его сам; открыть заранее или закрыть можно так:
