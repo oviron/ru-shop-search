@@ -406,3 +406,40 @@ async def test_search_reports_the_city_the_page_was_priced_for(monkeypatch):
     result = await server.dns_search("ноутбук")
 
     assert result.city == "Новосибирск"
+
+
+async def test_the_page_is_read_once_the_header_shows_the_city(monkeypatch):
+    """Prices render before the header's city; reading at the first price lost the city."""
+    _patch_tab(
+        monkeypatch,
+        payloads=({**SEARCH_EXTRACTED, "city": None}, {**SEARCH_EXTRACTED, "city": "Санкт-Петербург"}),
+    )
+    monkeypatch.setattr(server, "_PRICE_WAIT_MS", 5000)
+
+    result = await server.dns_search("rtx 5070")
+
+    assert result.city == "Санкт-Петербург"
+
+
+async def test_a_header_without_the_city_costs_a_few_polls_not_the_whole_wait(monkeypatch):
+    tab = _CountingTab([SEARCH_EXTRACTED])
+    _patch_tab(monkeypatch)
+    monkeypatch.setattr(server, "open_page", lambda url, wait_ms, challenge_grace_s=0.0: _yield(tab))
+    monkeypatch.setattr(server.asyncio, "sleep", _no_sleep)
+
+    await server._cdp_render("https://www.dns-shop.ru/search/?q=x", "js", wait_ms=8000, ctx=None)
+
+    assert tab.reads == server._CITY_POLLS + 1
+
+
+class _CountingTab(_Tab):
+    reads = 0
+
+    async def evaluate(self, js):
+        self.reads += 1
+        return await super().evaluate(js)
+
+
+@contextlib.asynccontextmanager
+async def _yield(tab):
+    yield tab

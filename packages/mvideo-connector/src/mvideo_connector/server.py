@@ -1,7 +1,7 @@
 """M.Video MCP connector.
 
 Search posts the query to the site's own ``/bff/products`` API over HTTP (curl_cffi as
-Chrome) with the Moscow city cookies. The card opens the product page in the plugin's
+Chrome) with the Saint Petersburg city cookies. The card opens the product page in the plugin's
 Chrome tab and reads its schema.org ``Product`` plus the rendered price block: over plain
 HTTP ``/bff/pdp/info`` and ``/bff/location`` answer 403 (live, 2026-09-27).
 
@@ -69,11 +69,13 @@ _NOT_FOUND_RE = re.compile(r"не найден|404|не существует", r
 _MARKETPLACE_PREFIX = "(МП)"
 _RENDER_WAIT_MS = 8000
 
-CITY = "Москва"
+# The site's own values for Saint Petersburg, read from its cookies after it switched city (2026-09-28).
+CITY = "Санкт-Петербург"
 CITY_COOKIES = {
-    "MVID_CITY_ID": "CityCZ_975",
-    "MVID_REGION_ID": "1",
-    "MVID_REGION_SHOP": "S002",
+    "MVID_CITY_ID": "CityCZ_1638",
+    "MVID_REGION_ID": "6",
+    "MVID_REGION_SHOP": "S904",
+    "MVID_KLADR_ID": "7800000000000",
     "MVID_TIMEZONE_OFFSET": "3",
 }
 
@@ -82,7 +84,7 @@ mcp = FastMCP(
     version=SERVER_VERSION,
     instructions=(
         "M.Video electronics catalog: mvideo_search asks the site's search API over HTTP, "
-        "mvideo_card opens a product page in the plugin's Chrome tab. Prices are for Moscow; "
+        "mvideo_card opens a product page in the plugin's Chrome tab. Prices are for Saint Petersburg; "
         "bonus roubles are never counted as price."
     ),
 )
@@ -235,7 +237,7 @@ async def mvideo_search(
     limit: Annotated[int, Field(default=20, ge=1, le=60, description="Items to return from the first page.")] = 20,
     ctx: Context | None = None,
 ) -> MVideoSearchResponse:
-    """Search M.Video the way the site does, first page by popularity, Moscow prices.
+    """Search M.Video the way the site does, first page by popularity, Saint Petersburg prices.
 
     ## Return Format
 
@@ -387,7 +389,7 @@ async def _cdp_render(url: str) -> dict[str, Any]:
         except SourceStoppedError as exc:
             raise_tool_error(exc)
         try:
-            async with open_page(url, wait_ms=0) as page:
+            async with open_page(url, wait_ms=0, cookies=CITY_COOKIES) as page:
                 deadline = asyncio.get_running_loop().time() + _RENDER_WAIT_MS / 1000
                 while True:
                     data = _parse_extract(await asyncio.wait_for(page.evaluate(_CARD_EXTRACT_JS), timeout=30.0))

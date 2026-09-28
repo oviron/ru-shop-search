@@ -1,0 +1,12 @@
+{
+  "url": "https://spb.nix.ru/price/search_panel_ajax.html#keywords=rtx%205070",
+  "captured_at": "2026-09-28",
+  "method": "captured live on 2026-09-28 10:33:48 in the plugin's Chrome tab (anonymous profile, home IP) by the connector's own _cdp_render: 50 rows rendered, the first 6 kept. On spb.nix.ru a row has one «cell-price» cell (colspan=2) and no СУПЕРЦЕНА; the term is the delivery date to Saint Petersburg.",
+  "ground_truth": {
+    "907082": "Zotac, 08.10, 128 042",
+    "860397": "GIGABYTE Gaming, 12.10, 114 931 (Moscow the day before: 112 683)",
+    "total": "293",
+    "city": "Санкт-Петербург"
+  },
+  "sha256": "47c8bcfc8b2a2c658bca3345b7b0a182e3a32948d7290049a73f4bce04ec1b16"
+}

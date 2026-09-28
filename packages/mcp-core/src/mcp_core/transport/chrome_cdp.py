@@ -41,7 +41,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator, Collection
+from collections.abc import AsyncIterator, Collection, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
@@ -889,11 +889,37 @@ class NavigationPolicyError(RuntimeError):
         super().__init__("CDP navigation left the allowed host policy")
 
 
+def _cookie_params(url: str, cookies: Mapping[str, str]) -> list[dict[str, str]]:
+    host = urlsplit(url).hostname or ""
+    return [{"name": name, "value": value, "domain": f".{host}", "path": "/"} for name, value in cookies.items()]
+
+
+async def _set_cookies(url: str, cookies: Mapping[str, str]) -> None:
+    """Browser-level Storage.setCookies, so both the Playwright and the raw-CDP tab see them."""
+    if not _cdp_port_open():
+        ok, _msg = await _ensure_cdp_running()
+        if not ok:
+            raise RuntimeError(f"CDP autostart failed (Chrome not reachable on {CDP_HOST}:{CDP_PORT})")
+    ws_url = _browser_ws_url()
+    if _websockets is None or not ws_url:
+        raise RuntimeError("setting tab cookies needs the 'websockets' package and a reachable Chrome")
+    request = {"id": 1, "method": "Storage.setCookies", "params": {"cookies": _cookie_params(url, cookies)}}
+    async with _websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps(request))
+        while True:
+            reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=_TAB_OP_TIMEOUT_S))
+            if reply.get("id") == 1:
+                break
+    if "error" in reply:
+        raise RuntimeError(f"Storage.setCookies failed: {reply['error'].get('message', '')[:120]}")
+
+
 @asynccontextmanager
 async def open_page(
     url: str,
     wait_ms: int = 5000,
     *,
+    cookies: Mapping[str, str] | None = None,
     allowed_hosts: Collection[str] | None = None,
     challenge_grace_s: float = 0.0,
     challenge_statuses: Collection[int] = _GRACE_STATUSES,
@@ -912,7 +938,8 @@ async def open_page(
         the same tab lifecycle runs over raw CDP instead.
 
     Only ``SHOP_DOMAINS`` hosts open at all; which paths are legitimate stays the
-    connector's call.
+    connector's call. ``cookies`` are set for the page host before the navigation
+    (a city the site keeps in a cookie).
 
     Concurrency is bounded here rather than by each connector: a fan-out over
     several CDP sources used to drive every tab through one Chrome at once and
@@ -937,6 +964,8 @@ async def open_page(
     host_policy = frozenset(allowed_hosts or ({initial_host} if initial_host else set()))
 
     grace = _Grace(challenge_grace_s, frozenset(challenge_statuses))
+    if cookies:
+        await _set_cookies(url, cookies)
     budget = navigation_budget()
     permit = await budget.acquire(initial_host or "")
     stack = AsyncExitStack()

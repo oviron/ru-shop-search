@@ -418,7 +418,7 @@ async def test_nix_search_rows_become_offers(monkeypatch):
         ("860397", 109296.0, "superprice", 112683.0, "Никс", True),
     ]
     assert offers[1].url == (
-        "https://www.nix.ru/autocatalog/gigabyte/video/"
+        "https://spb.nix.ru/autocatalog/gigabyte/video/"
         "12Gb-PCI-E-GDDR7-GIGABYTE-GV-N5070GAMING-OC-12GD-RTL-HDMI-plus-3xDP-GeForce-RTX5070_860397.html"
     )
 

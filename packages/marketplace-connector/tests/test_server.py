@@ -108,3 +108,16 @@ async def test_avito_is_searched_only_when_named(monkeypatch, tool):
     assert "avito" not in seen[0] and {"wildberries", "pepper", "dns"} <= set(seen[0])
     assert seen[1] == ["avito"]
     assert seen[2] == ["wildberries"]
+
+
+def test_the_plugin_asks_wb_and_detsky_mir_for_saint_petersburg_prices():
+    import json
+    from pathlib import Path
+
+    from wb_connector.regions import WB_REGIONS
+
+    manifest = json.loads((Path(__file__).parents[3] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    env = manifest["mcpServers"]["ru-shop-search"]["env"]
+
+    assert env == {"WB_REGION": "Санкт-Петербург", "DETMIR_REGION": "RU-SPE"}
+    assert env["WB_REGION"] in WB_REGIONS

@@ -620,7 +620,7 @@ async def _search_citilink(query: str, limit: int) -> list[MarketOffer]:
 
 
 async def _search_mvideo(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``mvideo_search`` results (the site's search API over HTTP, Moscow prices)."""
+    """Adapt ``mvideo_search`` results (the site's search API over HTTP, Saint Petersburg prices)."""
     server = SOURCES["mvideo"]
     response = await server.mvideo_search(query=query, limit=min(limit, 60))
 
@@ -1419,7 +1419,7 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "a sold-out row keeps in_stock=false and no price"
             ),
             "mvideo": (
-                "search asks the site's API over HTTP with Moscow prices, cards open in the plugin's "
+                "search asks the site's API over HTTP with Saint Petersburg prices, cards open in the plugin's "
                 "Chrome tab; bonus roubles are never price, a «(МП)» row is a marketplace partner"
             ),
             "vseinstrumenti": (
@@ -1427,12 +1427,13 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
                 "picks by IP; a card opens only by its URL, B2B prices are never used"
             ),
             "regard": (
-                "search and cards read the site's pages over HTTP with Moscow prices; bonus "
+                "search and cards read the site's pages over HTTP with Saint Petersburg prices; bonus "
                 "roubles are never price, a card opens by its URL or bare id"
             ),
             "nix": (
                 "search renders in the plugin's Chrome tab, cards read the page over HTTP, "
-                "Moscow prices; СУПЕРЦЕНА (prepay and pickup) is never the price"
+                "Saint Petersburg prices from spb.nix.ru; a card's СУПЕРЦЕНА (prepay and pickup) "
+                "ranks with price_condition=superprice, Saint Petersburg search rows carry none"
             ),
             "holodilnik": (
                 "search and cards read the site's pages over HTTP, prices for the city the site "

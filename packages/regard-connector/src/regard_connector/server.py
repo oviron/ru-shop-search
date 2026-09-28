@@ -62,6 +62,8 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 
 SITE_BASE = "https://www.regard.ru"
 _HOSTS = frozenset({"regard.ru", "www.regard.ru"})
+# townsHits: 44 Москва, 137 Санкт-Петербург; without the cookie an HTTP request gets Moscow.
+CITY_COOKIES = {"city_id": "137"}
 PAGE_SIZE = 24
 
 _CARD_PATH_RE = re.compile(r"^/product/(\d{3,12})(?:/[a-z0-9-]+)?/?$")
@@ -159,6 +161,7 @@ async def _get(url: str, label: str) -> Reply:
             provider="regard",
             label=label,
             headers=HEADERS,
+            cookies=CITY_COOKIES,
             timeout_s=_settings.timeout,
             max_bytes=_settings.max_body_bytes,
             retries=1,

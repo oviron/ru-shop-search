@@ -3,7 +3,7 @@
     uv run python scripts/live_matrix.py
 
 Магазины одного запроса идут параллельно, каждый получает один запрос; между запросами
-пауза 5 с. Ссылки не печатаются: в них бывают метки трекеров. Chrome после прогона
+пауза 5 с. Регионы берутся из ``env`` манифеста, как у плагина. Ссылки не печатаются: в них бывают метки трекеров. Chrome после прогона
 закрывай сам: ``uv run marketplace-mcp browser stop``.
 """
 
@@ -11,9 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
+import os
 import sys
+from pathlib import Path
 
-from marketplace_connector import server
+_MANIFEST = json.loads((Path(__file__).parents[1] / ".claude-plugin" / "plugin.json").read_text())
+for _name, _value in _MANIFEST["mcpServers"]["ru-shop-search"].get("env", {}).items():
+    os.environ.setdefault(_name, _value)
+
+from marketplace_connector import server  # noqa: E402  — после env манифеста: регион читается при импорте
 
 MATRIX: tuple[tuple[str, tuple[str, ...]], ...] = (
     (

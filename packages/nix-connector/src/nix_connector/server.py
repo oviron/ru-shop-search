@@ -63,16 +63,17 @@ _settings = get_settings()
 SERVER_VERSION = "2.4.2"
 SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
-SITE_BASE = "https://www.nix.ru"
+# Saint Petersburg lives on its own subdomain: on www the city snaps back to Moscow.
+SITE_BASE = "https://spb.nix.ru"
 SEARCH_URL = f"{SITE_BASE}/price/search_panel_ajax.html"
-_HOSTS = frozenset({"nix.ru", "www.nix.ru"})
+_HOSTS = frozenset({"nix.ru", "www.nix.ru", "spb.nix.ru"})
 MAX_ROWS = 50
 
 _min_gap = _settings.min_gap
 _CARD_PATH_RE = re.compile(r"^/autocatalog/(?:[A-Za-z0-9_+-]+/){1,4}[A-Za-z0-9_.+-]*_(\d{3,9})\.html$")
 _ROW_LINK_RE = re.compile(r'<a class="t" href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _ROW_TERM_RE = re.compile(r'id="sup_\d+">([^<]*)<')
-_ROW_PRICE_RE = re.compile(r'class="d tar cell-half-price"[^>]*>\s*<span[^>]*>([^<]*)</span>')
+_ROW_PRICE_RE = re.compile(r'class="d tar cell-(?:half-)?price"[^>]*>\s*<span[^>]*>([^<]*)</span>')
 _SUPERPRICE_RE = re.compile(r'class="superprice[^"]*">.*?<span class="nowrap">([^<]*)</span>', re.S)
 _TERM_RE = re.compile(r"^(?:ЕСТЬ|ЗАВТРА|ПОСЛЕЗАВТРА|\d{2}\.\d{2})$")
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -157,7 +158,8 @@ def _search_item(row: str) -> NixSearchItemOut:
     term = _text(term_match.group(1)) if term_match else None
     cells = [_text(c) for c in _ROW_PRICE_RE.findall(row)]
     # Two cells are «от» (СУПЕРЦЕНА) and «до» (the price); a single price fills only «от».
-    price = (_price(cells[1]) if cells[1] else _price(cells[0])) if len(cells) == 2 else None
+    # On spb.nix.ru the row has one wide «cell-price» cell.
+    price = _price(cells[-1] or cells[0]) if cells else None
     superprice = _price(cells[0]) if len(cells) == 2 and cells[1] else None
     return NixSearchItemOut(
         product_id=card[0] if card else None,

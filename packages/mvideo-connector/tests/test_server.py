@@ -93,7 +93,7 @@ def fake_tab(monkeypatch, *outcomes) -> list[dict]:
 # ------------------------------------------------------------------ search ----
 
 
-async def test_search_posts_the_sites_own_query_with_moscow_cookies(monkeypatch):
+async def test_search_posts_the_sites_own_query_with_saint_petersburg_cookies(monkeypatch):
     calls = stub_http(monkeypatch, ok(SEARCH))
 
     result = await server.mvideo_search("rtx  5070")
@@ -109,9 +109,20 @@ async def test_search_posts_the_sites_own_query_with_moscow_cookies(monkeypatch)
         "isGettingBonusRoubles": True,
         "query": "rtx 5070",
     }
-    assert calls[0]["cookies"]["MVID_CITY_ID"] == "CityCZ_975"
+    assert calls[0]["cookies"] == {
+        "MVID_CITY_ID": "CityCZ_1638",
+        "MVID_REGION_ID": "6",
+        "MVID_REGION_SHOP": "S904",
+        "MVID_KLADR_ID": "7800000000000",
+        "MVID_TIMEZONE_OFFSET": "3",
+    }
     assert calls[0]["headers"]["Referer"] == "https://www.mvideo.ru/search?q=rtx%205070"
-    assert (result.tier_used, result.city, result.total_available, result.count) == ("http", "Москва", 12, 12)
+    assert (result.tier_used, result.city, result.total_available, result.count) == (
+        "http",
+        "Санкт-Петербург",
+        12,
+        12,
+    )
     assert result.meta.warnings == []
 
 
@@ -293,7 +304,7 @@ async def test_card_reads_the_product_page_in_the_tab(monkeypatch):
 
     card = await server.mvideo_card("400678996")
 
-    assert calls == [{"url": CARD_URL}]
+    assert calls == [{"url": CARD_URL, "cookies": server.CITY_COOKIES}]
     assert (card.product_id, card.price_rub, card.old_price_rub, card.is_available) == (
         "400678996",
         84999.0,

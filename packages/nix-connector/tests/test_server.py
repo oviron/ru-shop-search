@@ -20,11 +20,13 @@ SEARCH = json.loads((FIXTURES / "search_rtx5070_live.json").read_text(encoding="
 UNRELATED = json.loads((FIXTURES / "search_unrelated_live.json").read_text(encoding="utf-8"))
 GENERIC = json.loads((FIXTURES / "search_generic_live.json").read_text(encoding="utf-8"))
 NONSENSE = json.loads((FIXTURES / "search_cyrillic_nonsense_live.json").read_text(encoding="utf-8"))
+SPB_SEARCH = json.loads((FIXTURES / "search_rtx5070_spb_live.json").read_text(encoding="utf-8"))
 CARD_HTML = (FIXTURES / "card_gigabyte_live.html").read_text(encoding="utf-8")
 CARD_URL = (
     "https://www.nix.ru/autocatalog/gigabyte/video/"
     "12Gb-PCI-E-GDDR7-GIGABYTE-GV-N5070GAMING-OC-12GD-RTL-HDMI-plus-3xDP-GeForce-RTX5070_860397.html"
 )
+SPB_CARD_URL = CARD_URL.replace("https://www.", "https://spb.")
 NOTHING = {"title": SEARCH["title"], "city": "Москва", "answered": True, "total": None, "nothing": True, "rows": []}
 
 
@@ -95,7 +97,7 @@ async def test_search_opens_the_sites_search_page_with_the_query_in_the_hash(mon
 
     result = await server.nix_search("rtx  5070")
 
-    assert calls[0]["url"] == "https://www.nix.ru/price/search_panel_ajax.html#keywords=rtx%205070"
+    assert calls[0]["url"] == "https://spb.nix.ru/price/search_panel_ajax.html#keywords=rtx%205070"
     assert (result.tier_used, result.city, result.total_available, result.count) == ("cdp", "Москва", 287, 6)
 
 
@@ -126,7 +128,25 @@ async def test_search_rows_carry_the_price_not_the_superprice(monkeypatch):
         "GIGABYTE Gaming GV-N5070GAMING OC-12GD < GeForce® RTX 5070 > "
         "(12 Гб, GDDR7, 192 бита, PCI Express, 3xDP, 1xHDMI)"
     )
-    assert items[1].url == CARD_URL
+    assert items[1].url == SPB_CARD_URL
+
+
+async def test_saint_petersburg_rows_carry_their_single_price(monkeypatch):
+    """On spb.nix.ru a row has one «cell-price» cell and no СУПЕРЦЕНА."""
+    fake_tab(monkeypatch, SPB_SEARCH)
+
+    result = await server.nix_search("rtx 5070")
+
+    assert result.city == "Санкт-Петербург"
+    assert [(it.product_id, it.price_rub, it.superprice_rub, it.availability, it.in_stock) for it in result.items] == [
+        ("907082", 128042.0, None, "08.10", True),
+        ("860397", 114931.0, None, "12.10", True),
+        ("860399", 104290.0, None, "05.10", True),
+        ("957068", 101686.0, None, "05.10", True),
+        ("860396", 109781.0, None, "08.10", True),
+        ("860395", 108480.0, None, "05.10", True),
+    ]
+    assert result.meta.warnings == []
 
 
 async def test_search_rows_carry_the_superprice_beside_the_price(monkeypatch):
@@ -330,14 +350,14 @@ async def test_card_reads_price_stock_and_brand_from_microdata(monkeypatch):
 
     card = await server.nix_card(CARD_URL)
 
-    assert urls == [CARD_URL]
+    assert urls == [SPB_CARD_URL]
     assert (card.product_id, card.price_rub, card.is_available, card.city) == ("860397", 112683.0, True, "Москва")
     assert (card.title, card.brand, card.part_number) == (
         "GIGABYTE Gaming GV-N5070GAMING OC-12GD",
         "GIGABYTE",
         "GV-N5070GAMING OC-12GD",
     )
-    assert (card.url, card.tier_used, card.meta.warnings) == (CARD_URL, "http", [])
+    assert (card.url, card.tier_used, card.meta.warnings) == (SPB_CARD_URL, "http", [])
 
 
 @pytest.mark.parametrize(
@@ -352,7 +372,7 @@ async def test_card_accepts_the_url_without_scheme_or_host(monkeypatch, given):
     urls = stub_http(monkeypatch, ok(CARD_HTML))
 
     assert (await server.nix_card(given)).price_rub == 112683.0
-    assert urls == [CARD_URL]
+    assert urls == [SPB_CARD_URL]
 
 
 @pytest.mark.parametrize(
@@ -453,8 +473,8 @@ async def test_a_redirect_to_the_same_product_is_followed_once(monkeypatch):
 
     card = await server.nix_card(CARD_URL)
 
-    assert urls == [CARD_URL, moved]
-    assert card.url == moved
+    assert urls == [SPB_CARD_URL, moved.replace("https://www.", "https://spb.")]
+    assert card.url == moved.replace("https://www.", "https://spb.")
 
 
 @pytest.mark.parametrize(
@@ -549,7 +569,7 @@ async def test_selfcheck_is_healthy_on_a_priced_search_and_card(monkeypatch):
     assert result.checks["search"].state == "healthy"
     assert result.checks["card"].state == "healthy"
     assert urls == [
-        "https://www.nix.ru/autocatalog/zotac/"
+        "https://spb.nix.ru/autocatalog/zotac/"
         "12Gb-PCI-E-GDDR7-ZOTAC-GeForce-RTX5070-SOLID-OC-RTL-HDMI-plus-3xDP-ZT-B50700J-10P_907082.html"
     ]
 
@@ -561,3 +581,12 @@ async def test_selfcheck_calls_a_refusal_inconclusive(monkeypatch):
 
     assert result.checks["search"].state == "inconclusive"
     assert result.checks["card"].state == "inconclusive"
+
+
+async def test_a_www_link_is_read_from_the_saint_petersburg_site(monkeypatch):
+    urls = stub_http(monkeypatch, ok(CARD_HTML.replace("https://www.nix.ru/", "https://spb.nix.ru/")))
+
+    card = await server.nix_card(CARD_URL)
+
+    assert urls == [CARD_URL.replace("https://www.nix.ru", "https://spb.nix.ru")]
+    assert card.url.startswith("https://spb.nix.ru/autocatalog/")

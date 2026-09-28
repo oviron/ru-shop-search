@@ -683,8 +683,8 @@ async def wb_card(
         str,
         Field(
             default=WB_DEFAULT_DEST,
-            description="Region ID. Default -1257786 (Moscow). Required for valid prices/stocks. "
-            "Other examples: -1257786 Moscow, -1029256 Saint Petersburg.",
+            description="Region ID. Default from WB_REGION / WB_DEFAULT_DEST. Required for valid prices/stocks. "
+            "Codes by city: wb_connector.regions.",
         ),
     ] = WB_DEFAULT_DEST,
     ctx: Context | None = None,
@@ -711,8 +711,7 @@ async def wb_card(
 
     Args:
         nm_ids: 1..100 nmId integers.
-        dest: Region ID (default Moscow -1257786). Required for valid prices.
-              Other examples: -1257786 Moscow, -1029256 Saint Petersburg.
+        dest: Region ID (default from WB_REGION / WB_DEFAULT_DEST). Required for valid prices.
     """
     log_event("wb_card.start", nm_count=len(nm_ids), dest=dest)
     if ctx is not None:
@@ -1585,7 +1584,7 @@ async def wb_search(
         str,
         Field(
             default=WB_DEFAULT_DEST,
-            description="Region ID. Default from WB_REGION / WB_DEFAULT_DEST (Moscow). Prices and stock depend on it.",
+            description="Region ID. Default from WB_REGION / WB_DEFAULT_DEST. Prices and stock depend on it.",
         ),
     ] = WB_DEFAULT_DEST,
     page: Annotated[
@@ -1620,7 +1619,7 @@ async def wb_search(
 
     Args:
         query: Russian text.
-        dest: Region. Default Moscow.
+        dest: Region. Default from WB_REGION / WB_DEFAULT_DEST.
         page: 1..20.
     """
     log_event("wb_search.start", query=query[:100], page=page, dest=dest)
@@ -2035,7 +2034,7 @@ async def wb_category_products(
         str,
         Field(
             default="",
-            description="WB region id. Defaults to WB_DEFAULT_DEST (Moscow). Prices and stock are region-specific.",
+            description="WB region id. Defaults to WB_DEFAULT_DEST (WB_REGION). Prices and stock are region-specific.",
         ),
     ] = "",
     ctx: Context | None = None,

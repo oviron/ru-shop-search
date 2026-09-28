@@ -578,3 +578,9 @@ def test_a_429_reloading_into_200_passes_when_the_caller_names_it(instant_sleep)
     page = _StatusPage(429, 200)
 
     assert asyncio.run(chrome_cdp._challenge_cleared(page, 429, grace_s=5, statuses=frozenset({429}))) is True
+
+
+def test_tab_cookies_are_scoped_to_the_page_host():
+    assert chrome_cdp._cookie_params("https://www.mvideo.ru/products/1", {"MVID_CITY_ID": "CityCZ_1638"}) == [
+        {"name": "MVID_CITY_ID", "value": "CityCZ_1638", "domain": ".www.mvideo.ru", "path": "/"}
+    ]

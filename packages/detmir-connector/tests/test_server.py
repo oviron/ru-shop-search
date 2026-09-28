@@ -736,3 +736,19 @@ async def test_selfcheck_says_blocked_when_the_edge_refuses(monkeypatch, no_dela
     assert result.status == "inconclusive"
     notes = [note for entry in result.checks.values() for note in entry.notes]
     assert any("blocked at the edge" in note for note in notes), notes
+
+
+async def test_the_search_page_is_asked_for_the_region_from_settings(monkeypatch, no_delay):
+    """The HTML search takes its region from the site cookie, not from a filter."""
+    sent: list[dict[str, str] | None] = []
+
+    async def fake_shop_request(url, **kwargs):
+        sent.append(kwargs.get("cookies"))
+        return Reply(200, SEARCH_HTML, None)
+
+    monkeypatch.setattr(server, "shop_request", fake_shop_request)
+    monkeypatch.setattr(server._settings, "region", "RU-SPE")
+
+    await server.detmir_search("lego technic")
+
+    assert sent == [{"geoCityDMIso": "RU-SPE"}]

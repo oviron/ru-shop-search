@@ -105,6 +105,7 @@ _REFUSAL_STATUSES = frozenset({401, 403, 429})
 # Qrator's 401 reloads itself into 200 in ~2 s (live, 2026-09-27).
 _CHALLENGE_GRACE_S = 12.0
 _PRICE_WAIT_MS = 8000
+_CITY_POLLS = 6
 
 _cache: TTLCache = TTLCache(ttl_s=_settings.cache_ttl, max_entries=128)
 _pacer = Pacer(_min_gap, source="dns")
@@ -399,7 +400,7 @@ async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | No
 
     Qrator answers a tab without its cookie with 401 and a script that reloads the
     page into 200 by itself; ``open_page`` waits for that. A 401/403/429 that stays
-    stops DNS. ``wait_ms`` caps how long to wait for prices to render.
+    stops DNS. ``wait_ms`` caps how long to wait for prices and the city to render.
     """
     async with _cdp_lock:
         try:
@@ -409,9 +410,15 @@ async def _cdp_render(url: str, extract_js: str, wait_ms: int, ctx: Context | No
         try:
             async with open_page(url, wait_ms=0, challenge_grace_s=_CHALLENGE_GRACE_S) as page:
                 deadline = asyncio.get_running_loop().time() + wait_ms / 1000
+                city_polls = _CITY_POLLS
                 while True:
                     data = _parse_extract(await asyncio.wait_for(page.evaluate(extract_js), timeout=30.0))
-                    if _has_prices(data) or asyncio.get_running_loop().time() >= deadline:
+                    if _has_prices(data):
+                        # The header's city renders after the prices.
+                        if data.get("city") or city_polls == 0:
+                            break
+                        city_polls -= 1
+                    if asyncio.get_running_loop().time() >= deadline:
                         break
                     await asyncio.sleep(0.5)
         except NavBlocked as exc:

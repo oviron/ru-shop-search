@@ -137,6 +137,8 @@ async def _request(url: str, label: str) -> Reply:
             retries=_settings.net_retries,
             backoff_s=_settings.net_backoff_s,
             proxy=_proxy(),
+            # The HTML search reads the region from this cookie; the API reads its filter.
+            cookies={"geoCityDMIso": _settings.region.strip().upper()},
         )
     except ConnectorError as exc:
         if exc.to_dict().get("status_code") == 418:
@@ -336,8 +338,7 @@ async def detmir_search(
 ) -> DetmirListResponse:
     """Search Detsky Mir the way the site does, first page by popularity.
 
-    Prices and stock are for the region the site picks (``region``; Moscow for a
-    fresh request). ``price_rub`` is the everyday price; voucher prices are left out.
+    Prices and stock are for ``DETMIR_REGION``, sent as the site's region cookie. ``price_rub`` is the everyday price; voucher prices are left out.
     When nothing matches, the site pads the page with unrelated goods; those come
     back as an empty list with a ``no_match`` warning.
 

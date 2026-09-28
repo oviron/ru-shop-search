@@ -535,3 +535,18 @@ async def test_selfcheck_drift_when_the_page_moves(monkeypatch):
     result = await server.regard_selfcheck()
 
     assert result.checks["search"].state == "drift"
+
+
+async def test_every_request_asks_for_saint_petersburg_prices(monkeypatch):
+    sent = []
+
+    async def fake_get(url, **kwargs):
+        sent.append(kwargs.get("cookies"))
+        return ok(SEARCH_HTML) if "search" in url else ok(CARD_HTML)
+
+    monkeypatch.setattr(impersonated, "impersonated_get", fake_get)
+
+    await server.regard_search("rtx 5070")
+    await server.regard_card(CARD_URL)
+
+    assert sent == [{"city_id": "137"}, {"city_id": "137"}]
