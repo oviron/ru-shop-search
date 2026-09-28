@@ -86,11 +86,12 @@ async def test_native_ozon_stock_labels_cannot_fabricate_available_winner(monkey
         "6": None,
         "7": True,
     }
-    # Ozon search rows carry only the Ozon Card price, so none of them ranks.
-    assert result.cheapest is None
+    assert result.cheapest.product_id == "7"
+    assert result.cheapest_comparable.product_id == "7"
+    assert result.cheapest.price_rub == 7000
 
 
-async def test_native_ozon_tile_price_rides_aside_whatever_its_style(monkeypatch):
+async def test_native_ozon_tile_price_ranks_as_the_card_price_whatever_its_style(monkeypatch):
     # priceV2 of the 2026-09-27 «rtx 5070» search; both tiles showed the Ozon Card price of their cards.
     def tile(sku, price):
         return ozon._parse_search_tile(
@@ -119,10 +120,13 @@ async def test_native_ozon_tile_price_rides_aside_whatever_its_style(monkeypatch
     monkeypatch.setattr(server, "SOURCES", {"ozon": SimpleNamespace(ozon_search=search)})
     result = await server.compare_prices(query="RTX 5070", sources=["ozon"])
 
-    got = {item.product_id: (item.price_rub, item.price_with_subscription_rub) for item in result.offers}
-    assert got == {"4803458585": (None, 106011), "5180676807": (None, 161249)}
-    assert result.cheapest is None
-    assert any(w.startswith("ozon_card_price_only:") for w in result.source_outcomes[0].warnings)
+    got = {
+        item.product_id: (item.price_rub, item.price_condition, item.price_with_subscription_rub)
+        for item in result.offers
+    }
+    assert got == {"4803458585": (106011, "ozon_card", None), "5180676807": (161249, "ozon_card", None)}
+    assert result.cheapest is not None and result.cheapest.product_id == "4803458585"
+    assert any(w.startswith("ozon_card_price:") for w in result.source_outcomes[0].warnings)
 
 
 @pytest.mark.parametrize("channel", ["textDS", "labelList"])
@@ -155,7 +159,8 @@ async def test_native_ozon_explicit_absence_survives_both_label_channels(monkeyp
     result = await server.compare_prices(query="Kettle", sources=["ozon"], in_stock_only=True)
 
     assert {item.product_id: item.in_stock for item in result.offers} == {"1": False, "2": True}
-    assert result.cheapest is None
+    assert result.cheapest.product_id == "2"
+    assert result.cheapest_comparable.product_id == "2"
 
 
 @pytest.mark.parametrize("with_ware_id", [True, False])

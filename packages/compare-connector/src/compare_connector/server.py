@@ -15,10 +15,10 @@ source is queried in parallel and its outcome reported per-source. A caller can
 always see which marketplaces answered and which did not.
 
 **Subscription prices are never silently compared against everyday prices.**
-Yandex Market leads with a Plus-subscriber price 25-30% below the everyday one,
-and an Ozon search tile shows only the Ozon Card price. Ranking either against
-a Wildberries price would fabricate a bargain. Comparison uses everyday prices;
-subscriber and card prices ride along in a separate field.
+Yandex Market leads with a Plus-subscriber price 25-30% below the everyday one;
+ranking it against a Wildberries price would fabricate a bargain, so it rides
+along in a separate field. Prices behind a free condition (Ozon Card, Nix
+СУПЕРЦЕНА, an AliExpress coupon) do rank, labelled by price_condition.
 
 **Sources are optional at import time.** Ozon pulls in curl_cffi and Playwright,
 which many users do not want. Each connector is imported defensively, and the
@@ -488,9 +488,9 @@ async def _search_yandex(query: str, limit: int) -> list[MarketOffer]:
 async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
     """Adapt ``ozon_search`` results.
 
-    A search row has no brand, seller or everyday price; ``ozon_card`` has them. The
-    tile price is the Ozon Card one (two tiles checked against their cards on
-    2026-09-27), so it rides aside and the row does not rank.
+    A search row has no brand, seller or price without the card; ``ozon_card`` has them.
+    The tile price is the Ozon Card one (two tiles checked against their cards on
+    2026-09-27); the card is free, so it ranks under price_condition ozon_card.
     """
     server = SOURCES["ozon"]
     response = await server.ozon_search(query=query)
@@ -506,8 +506,8 @@ async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
                 # does. Left empty rather than invented.
                 brand="",
                 seller="",
-                price_rub=None,
-                price_with_subscription_rub=_as_price(item.price),
+                price_rub=_as_price(item.price),
+                price_condition="ozon_card",
                 rating=_as_price(item.rating),
                 rating_count=_as_count(item.rating_count),
                 in_stock=_stock_from_label(item.stock),
@@ -515,10 +515,10 @@ async def _search_ozon(query: str, limit: int) -> list[MarketOffer]:
             )
         )
     batch = OfferBatch(offers, response)
-    if any(offer.price_with_subscription_rub is not None for offer in offers):
+    if any(offer.price_rub is not None for offer in offers):
         batch.warnings.append(
-            "ozon_card_price_only: search rows show the Ozon Card price, which does not rank; "
-            "card('ozon', url) gives the everyday price"
+            "ozon_card_price: search rows show the Ozon Card price, ranked as price_rub; "
+            "card('ozon', url) gives the price without the card"
         )
     return batch
 
@@ -692,8 +692,14 @@ async def _search_regard(query: str, limit: int) -> list[MarketOffer]:
     return OfferBatch(offers, response)
 
 
+def _conditional(regular: float | None, lower: float | None, condition: str) -> dict[str, Any]:
+    if lower is None or (regular is not None and lower >= regular):
+        return {"price_rub": regular}
+    return {"price_rub": lower, "price_condition": condition, "price_regular_rub": regular}
+
+
 async def _search_nix(query: str, limit: int) -> list[MarketOffer]:
-    """Adapt ``nix_search`` results (the plugin's Chrome tab; СУПЕРЦЕНА is never the price)."""
+    """Adapt ``nix_search`` results (the plugin's Chrome tab); СУПЕРЦЕНА ranks under price_condition."""
     server = SOURCES["nix"]
     response = await server.nix_search(query=query, limit=min(limit, 50))
 
@@ -705,7 +711,7 @@ async def _search_nix(query: str, limit: int) -> list[MarketOffer]:
                 product_id=str(item.product_id or ""),
                 title=item.title or "",
                 seller="Никс",
-                price_rub=item.price_rub,
+                **_conditional(item.price_rub, item.superprice_rub, "superprice"),
                 in_stock=item.in_stock,
                 url=item.url or "",
             )
@@ -756,7 +762,7 @@ async def _search_aliexpress(query: str, limit: int) -> list[MarketOffer]:
                 title=item.title or "",
                 brand="",
                 seller="",
-                price_rub=item.price_rub,
+                **_conditional(item.price_rub, item.coupon_price_rub, "coupon"),
                 rating=item.rating,
                 rating_count=None,
                 in_stock=None,
@@ -986,9 +992,9 @@ async def compare_prices(
 
     Two things to read carefully in the output:
 
-    - `cheapest` is chosen on everyday prices. Yandex Market's Plus price and the
-      Ozon Card price appear as `price_with_subscription_rub` and are excluded from
-      ranking, since an anonymous buyer does not get them.
+    - `cheapest` is chosen on `price_rub`. Yandex Market's Plus price appears as
+      `price_with_subscription_rub` and is excluded from ranking. The Ozon Card price,
+      Nix СУПЕРЦЕНА and AliExpress coupon price rank, named by `price_condition`.
     - `source_outcomes` shows which marketplaces answered. A blocked or timed-out
       source means the comparison is partial, not that the product is absent
       there — `complete` tells you which case you are in.
@@ -1400,7 +1406,7 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             else ("deselected by MARKETPLACE_SOURCES" if "detsky_mir" in deselected else "not installed"),
             "ozon": (
                 "search through the plugin's Chrome tab; a search row carries only the Ozon Card "
-                "price and does not rank, the everyday price comes from card"
+                "price, ranked with price_condition ozon_card; the price without the card comes from card"
             ),
             "yandex_market": "reports both an everyday price and a Plus-subscriber price",
             "lamoda": (
@@ -1435,7 +1441,7 @@ async def compare_sources(ctx: Context | None = None) -> dict[str, Any]:
             "aliexpress": (
                 "search and cards render in the plugin's Chrome tab, a card opens from a search tab; "
                 "the x5sec check stops the shop, goods that do not name the query are dropped, "
-                "coupon prices are never the price"
+                "a coupon price ranks with price_condition coupon"
             ),
             "pepper": (
                 "community deal posts read in the plugin's Chrome tab; a post's price sits in "

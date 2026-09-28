@@ -31,10 +31,10 @@ MATRIX: tuple[tuple[str, tuple[str, ...]], ...] = (
 def _row(outcome, offers) -> str:
     rows = [o for o in offers if o.source == outcome.source]
     priced = [o.price_rub for o in rows if o.price_rub is not None]
-    other = [o for o in rows if o.price_rub is None and (o.price_with_subscription_rub or o.deal)]
+    other = [o for o in rows if o.price_condition or o.deal]
     linked = sum(1 for o in rows if o.url)
     span = f"{min(priced):,.0f}–{max(priced):,.0f} ₽" if priced else "—"
-    note = f"; без обычной цены, но с ценой по карте или сделкой: {len(other)}" if other else ""
+    note = f"; с ценой по условию (карта, купон, СУПЕРЦЕНА) или сделкой: {len(other)}" if other else ""
     detail = "" if outcome.status == "ok" else f"; {outcome.error_code or ''} {(outcome.detail or '')[:90]}"
     return (
         f"{outcome.source:<15} {outcome.status:<8} строк {len(rows):>2}, с ценой {len(priced):>2}, "

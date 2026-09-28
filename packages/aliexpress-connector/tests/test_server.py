@@ -96,6 +96,14 @@ async def test_search_coupon_price_never_becomes_the_price(monkeypatch):
     assert "coupon" in warnings
 
 
+async def test_search_coupon_price_rides_beside_the_price(monkeypatch):
+    _patch_search(monkeypatch, SEARCH_EXTRACTED)
+
+    items = (await server.aliexpress_search("realme watch")).items
+
+    assert [(it.price_rub, it.coupon_price_rub) for it in items[:2]] == [(2939.0, None), (5579.0, 5320.0)]
+
+
 async def test_card_punish_maps_to_transport_error(monkeypatch):
     payload = dict(CARD_EXTRACTED)
     payload["punish"] = True
@@ -258,3 +266,13 @@ async def test_selfcheck_drift_on_zero_tiles(monkeypatch):
 
     assert result.status == "drift_detected"
     assert result.checks["search"].state == "drift"
+
+
+async def test_card_coupon_price_rides_beside_the_price(monkeypatch):
+    payload = dict(CARD_EXTRACTED)
+    payload["price_texts"] = {"attached": ["2 939 ₽", "2 700 ₽ с купоном", "6 967 ₽"], "other": []}
+    _patch_card(monkeypatch, payload)
+
+    card = await server.aliexpress_card("1005010003103368")
+
+    assert (card.price_rub, card.coupon_price_rub) == (2939.0, 2700.0)

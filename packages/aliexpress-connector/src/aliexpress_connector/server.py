@@ -311,14 +311,14 @@ def _tile_prices(tile: dict[str, Any]) -> tuple[float | None, float | None, floa
     return price, old_price, coupon
 
 
-def _card_prices(payload: dict[str, Any]) -> tuple[float | None, float | None]:
-    """(price, old_price) from the sticky offer bar, paired the same way as tiles."""
-    regular, _coupon = _scored_prices(_attached(payload))
-    return _pair(regular)
+def _card_prices(payload: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    """(price, old_price, coupon_price) from the sticky offer bar, paired the same way as tiles."""
+    regular, coupon = _scored_prices(_attached(payload))
+    return *_pair(regular), coupon
 
 
 def _item_from_payload(tile: dict[str, Any]) -> AliSearchItemOut:
-    price, old_price, _coupon = _tile_prices(tile)
+    price, old_price, coupon = _tile_prices(tile)
     item_id = str(tile.get("item_id") or "")
     sku_id = tile.get("sku_id") if isinstance(tile.get("sku_id"), str) else None
     return AliSearchItemOut(
@@ -326,6 +326,7 @@ def _item_from_payload(tile: dict[str, Any]) -> AliSearchItemOut:
         title=title_from_tile(tile),
         price_rub=price,
         old_price_rub=old_price,
+        coupon_price_rub=coupon,
         rating=R.coerce_rating(tile.get("rating")),
         orders_count=R.coerce_int(tile.get("orders")),
         sku_id=sku_id,
@@ -484,7 +485,7 @@ async def aliexpress_search(
     ## Return Format
 
     AliSearchResponse: {status, query, tier_used, count, items[], meta}.
-    price_rub is None when absent — never 0; a coupon price is never price_rub.
+    price_rub is None when absent — never 0; a coupon price goes to coupon_price_rub, never price_rub.
 
     ## Error Format
 
@@ -531,7 +532,7 @@ async def aliexpress_search(
         if coupon_seen:
             warnings.append(
                 f"{coupon_seen} tile(s) advertise a coupon price; price_rub carries the regular "
-                "price and the coupon value is not part of the response"
+                "price and coupon_price_rub the coupon one"
             )
         result = AliSearchResponse(query=query, tier_used=tier, count=len(items), items=items)
         attached = R.attach_meta(
@@ -609,7 +610,7 @@ async def aliexpress_card(
             tier = "cdp"
             _cache.set(url, payload)
         title = R.flatten_text(payload.get("title"))
-        price, old_price = _card_prices(payload)
+        price, old_price, coupon = _card_prices(payload)
         rating = R.coerce_rating(payload.get("rating_text"))
         # Orders arrive from the SEO description block only: the extractor
         # emits meta_description, and there is no dedicated orders field in the
@@ -642,6 +643,7 @@ async def aliexpress_card(
             title=title,
             price_rub=price,
             old_price_rub=old_price,
+            coupon_price_rub=coupon,
             rating=rating,
             orders_count=orders,
             url=url,
@@ -780,7 +782,7 @@ async def _aliexpress_selfcheck_impl(ctx: Context | None) -> AliSelfcheckRespons
                 notes=[f"{type(exc).__name__}: {str(exc)[:120]}"],
             )
         else:
-            price, _old = _card_prices(card)
+            price, _old, _coupon = _card_prices(card)
             if _is_punish(card):
                 checks["card"] = R.selfcheck_entry(
                     "inconclusive",

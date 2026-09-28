@@ -18,6 +18,9 @@ class NixSearchItemOut(BaseModel):
         description="The site's price (the «до» column); None when absent — never 0. "
         "СУПЕРЦЕНА (prepay, store pickup) is not the price.",
     )
+    superprice_rub: float | None = Field(
+        default=None, description="СУПЕРЦЕНА (the «от» column): prepay and store pickup; None when the row has none."
+    )
     availability: str | None = Field(
         default=None, description="The «Наличие» column as shown: ЕСТЬ, ЗАВТРА, ПОСЛЕЗАВТРА or a dd.mm date."
     )
@@ -47,6 +50,9 @@ class NixCardResponse(BaseModel):
     brand: str | None = Field(default=None, description="Brand name.")
     part_number: str | None = Field(default=None, description="Manufacturer part number (schema.org sku).")
     price_rub: float | None = Field(default=None, description="The site's price; None when absent — never 0.")
+    superprice_rub: float | None = Field(
+        default=None, description="СУПЕРЦЕНА: prepay and store pickup; None when the page shows none."
+    )
     is_available: bool | None = Field(default=None, description="True on sale, False sold out or withdrawn.")
     city: str | None = Field(default=None, description="City the site priced the page for.")
     url: str = Field(default="", description="Product URL.")

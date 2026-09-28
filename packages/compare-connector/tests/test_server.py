@@ -411,9 +411,11 @@ async def test_nix_search_rows_become_offers(monkeypatch):
 
     offers = await server._search_nix("rtx 5070", 2)
 
-    assert [(o.product_id, o.price_rub, o.seller, o.in_stock) for o in offers] == [
-        ("907082", 128042.0, "Никс", True),
-        ("860397", 112683.0, "Никс", True),
+    assert [
+        (o.product_id, o.price_rub, o.price_condition, o.price_regular_rub, o.seller, o.in_stock) for o in offers
+    ] == [
+        ("907082", 124193.0, "superprice", 128042.0, "Никс", True),
+        ("860397", 109296.0, "superprice", 112683.0, "Никс", True),
     ]
     assert offers[1].url == (
         "https://www.nix.ru/autocatalog/gigabyte/video/"
@@ -1041,7 +1043,8 @@ async def test_ozon_adapter_reads_the_real_model_fields(monkeypatch):
     assert len(offers) == 1
     got = offers[0]
     assert got.product_id == "123456"
-    assert (got.price_rub, got.price_with_subscription_rub) == (None, 1999.0)
+    assert (got.price_rub, got.price_condition, got.price_regular_rub) == (1999.0, "ozon_card", None)
+    assert got.price_with_subscription_rub is None
     assert got.rating == 4.8
     assert got.rating_count == 24086, "review count was always None before"
     assert got.in_stock is True, "stock was ignored entirely before"
@@ -1223,6 +1226,27 @@ async def test_cdp_source_adapters_map_their_fields(monkeypatch):
     got = await server._search_aliexpress("часы", 10)
     assert got[0].price_rub == 3290.0
     assert got[0].rating == 4.7
+
+
+async def test_an_aliexpress_coupon_price_ranks_with_its_condition(monkeypatch):
+    from aliexpress_connector.models_output import AliSearchItemOut
+
+    class FakeAli:
+        async def aliexpress_search(self, query):
+            return _FakeResponse(
+                [
+                    AliSearchItemOut(item_id="1", title="Часы", price_rub=5579.0, coupon_price_rub=5320.0),
+                    AliSearchItemOut(item_id="2", title="Часы", price_rub=2939.0),
+                ]
+            )
+
+    monkeypatch.setitem(server.SOURCES, "aliexpress", FakeAli())
+    got = await server._search_aliexpress("часы", 10)
+
+    assert [(o.price_rub, o.price_condition, o.price_regular_rub) for o in got] == [
+        (5320.0, "coupon", 5579.0),
+        (2939.0, "", None),
+    ]
 
 
 async def test_every_searchable_source_has_an_impl_and_a_search_tool():

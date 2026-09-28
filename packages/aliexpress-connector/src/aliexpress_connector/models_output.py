@@ -15,6 +15,7 @@ class AliSearchItemOut(BaseModel):
     title: str | None = Field(default=None, description="Product title from the search tile.")
     price_rub: float | None = Field(default=None, description="Price in rubles; None when absent — never 0.")
     old_price_rub: float | None = Field(default=None, description="Strikethrough/base price in rubles.")
+    coupon_price_rub: float | None = Field(default=None, description="Lowest «с купоном» price: needs a coupon.")
     rating: float | None = Field(default=None, description="Tile rating, 0..5.")
     orders_count: int | None = Field(default=None, description="'N купили' from the tile — orders, not reviews.")
     sku_id: str | None = Field(default=None, description="sku_id query parameter, when the tile carries one.")
@@ -40,6 +41,7 @@ class AliCardResponse(BaseModel):
     title: str | None = Field(default=None, description="Product title (the card h1).")
     price_rub: float | None = Field(default=None, description="Price in rubles; None when absent — never 0.")
     old_price_rub: float | None = Field(default=None, description="Base/strikethrough price in rubles.")
+    coupon_price_rub: float | None = Field(default=None, description="Lowest «с купоном» price: needs a coupon.")
     rating: float | None = Field(default=None, description="Product rating from the card module.")
     orders_count: int | None = Field(
         default=None, description="Order count from the page SEO block; None when drift-prone meta absent."

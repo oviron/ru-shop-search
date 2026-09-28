@@ -129,6 +129,18 @@ async def test_search_rows_carry_the_price_not_the_superprice(monkeypatch):
     assert items[1].url == CARD_URL
 
 
+async def test_search_rows_carry_the_superprice_beside_the_price(monkeypatch):
+    fake_tab(monkeypatch, with_rows(SEARCH, SEARCH["rows"][:2] + UNRELATED["rows"][2:3]))
+
+    items = (await server.nix_search("rtx 5070")).items
+
+    assert [(it.price_rub, it.superprice_rub) for it in items] == [
+        (128042.0, 124193.0),
+        (112683.0, 109296.0),
+        (5569.0, None),
+    ]
+
+
 async def test_a_row_with_one_price_takes_it_as_the_price(monkeypatch):
     fake_tab(monkeypatch, with_rows(SEARCH, UNRELATED["rows"][2:3]))
 
@@ -409,6 +421,17 @@ async def test_the_superprice_line_is_not_the_price(monkeypatch):
     card = await server.nix_card(CARD_URL)
 
     assert card.price_rub is None
+
+
+async def test_the_card_carries_the_superprice_beside_the_price(monkeypatch):
+    stub_http(monkeypatch, ok(CARD_HTML), ok(CARD_HTML.replace('<span class="superprice ">', "<span>")))
+
+    card = await server.nix_card(CARD_URL)
+    server._cache.clear()
+    plain = await server.nix_card(CARD_URL)
+
+    assert (card.price_rub, card.superprice_rub) == (112683.0, 109296.0)
+    assert (plain.price_rub, plain.superprice_rub) == (112683.0, None)
 
 
 @pytest.mark.parametrize("status", [404, 410])

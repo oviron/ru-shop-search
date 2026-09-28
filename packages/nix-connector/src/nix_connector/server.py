@@ -73,6 +73,7 @@ _CARD_PATH_RE = re.compile(r"^/autocatalog/(?:[A-Za-z0-9_+-]+/){1,4}[A-Za-z0-9_.
 _ROW_LINK_RE = re.compile(r'<a class="t" href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _ROW_TERM_RE = re.compile(r'id="sup_\d+">([^<]*)<')
 _ROW_PRICE_RE = re.compile(r'class="d tar cell-half-price"[^>]*>\s*<span[^>]*>([^<]*)</span>')
+_SUPERPRICE_RE = re.compile(r'class="superprice[^"]*">.*?<span class="nowrap">([^<]*)</span>', re.S)
 _TERM_RE = re.compile(r"^(?:ЕСТЬ|ЗАВТРА|ПОСЛЕЗАВТРА|\d{2}\.\d{2})$")
 _TAG_RE = re.compile(r"<[^>]+>")
 _PRODUCT_RE = re.compile(r'itemtype="https?://schema\.org/Product"')
@@ -157,10 +158,12 @@ def _search_item(row: str) -> NixSearchItemOut:
     cells = [_text(c) for c in _ROW_PRICE_RE.findall(row)]
     # Two cells are «от» (СУПЕРЦЕНА) and «до» (the price); a single price fills only «от».
     price = (_price(cells[1]) if cells[1] else _price(cells[0])) if len(cells) == 2 else None
+    superprice = _price(cells[0]) if len(cells) == 2 and cells[1] else None
     return NixSearchItemOut(
         product_id=card[0] if card else None,
         title=_text(link.group(2)) if link else None,
         price_rub=price,
+        superprice_rub=superprice,
         availability=term,
         in_stock=True if term and _TERM_RE.match(term) else None,
         url=card[1] if card else None,
@@ -371,11 +374,13 @@ def _card_fields(page: str, product_id: str) -> dict[str, Any]:
     stock = re.search(r'itemprop="availability" href="https?://schema\.org/(\w+)"', offer)
     h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
     city = re.search(r'id="toolbar-city-change-name">([^<]*)<', page)
+    superprice = _SUPERPRICE_RE.search(page[: offer_match.start()])
     return {
         "title": _text(h1.group(1)) if h1 else _meta(page, "name"),
         "brand": _meta(page, "brand"),
         "part_number": _meta(page, "sku"),
         "price": _price(_meta(offer, "price")) if currency in (None, "RUB") else None,
+        "superprice": _price(_text(superprice.group(1))) if superprice else None,
         "is_available": _OFFER_STOCK.get(stock.group(1)) if stock else None,
         "city": _text(city.group(1)) if city else None,
     }
@@ -461,6 +466,7 @@ async def nix_card(
         brand=fetched["brand"],
         part_number=fetched["part_number"],
         price_rub=fetched["price"],
+        superprice_rub=fetched["superprice"],
         is_available=fetched["is_available"],
         city=fetched["city"],
         url=fetched["url"],

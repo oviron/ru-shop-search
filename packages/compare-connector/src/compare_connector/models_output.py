@@ -36,9 +36,20 @@ class MarketOffer(BaseModel):
     price_rub: float | None = Field(
         default=None,
         description=(
-            "Everyday price in roubles — the only basis for ranking. None when absent, never 0, "
-            "and always None for a marketplace that quotes in another currency."
+            "Price in roubles — the only basis for ranking. None when absent, never 0, "
+            "and always None for a marketplace that quotes in another currency. "
+            "price_condition names what the buyer must do to get it."
         ),
+    )
+    price_condition: str = Field(
+        default="",
+        description=(
+            "Empty when anyone pays price_rub. ozon_card: free Ozon Card; superprice: Nix prepay and store "
+            "pickup; coupon: an AliExpress coupon to collect."
+        ),
+    )
+    price_regular_rub: float | None = Field(
+        default=None, description="Price without price_condition, when the shop shows it; None otherwise."
     )
     currency: str = Field(
         default="rub",
@@ -51,7 +62,7 @@ class MarketOffer(BaseModel):
     price_with_subscription_rub: float | None = Field(
         default=None,
         description=(
-            "Lower price needing a subscription or a store card (Yandex Plus, Ozon Card). "
+            "Lower price needing a paid subscription (Yandex Plus). "
             "Excluded from ranking, since an anonymous buyer does not get it."
         ),
     )

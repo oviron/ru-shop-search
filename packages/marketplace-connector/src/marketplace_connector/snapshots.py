@@ -45,12 +45,13 @@ class Snapshots:
         return db
 
     def record(self, offers: Iterable[MarketOffer], *, now: datetime.datetime) -> None:
-        """Одна запись на товар, день и цену: повторный поиск в тот же день не раздувает базу."""
+        """Одна запись на товар, день и цену; цена без условия (карты, купона), чтобы ряд не смешивал основания."""
         stamp = now.astimezone(datetime.UTC).isoformat(timespec="seconds")
+        priced = ((o, o.price_regular_rub if o.price_condition else o.price_rub) for o in offers)
         rows = [
-            (o.source, o.product_id, url_key(o.url), o.title[:200], o.price_rub, stamp)
-            for o in offers
-            if o.product_id and o.price_rub is not None and o.currency == "rub"
+            (o.source, o.product_id, url_key(o.url), o.title[:200], price, stamp)
+            for o, price in priced
+            if o.product_id and price is not None and o.currency == "rub"
         ]
         if not rows:
             return

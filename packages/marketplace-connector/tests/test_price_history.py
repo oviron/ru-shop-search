@@ -54,6 +54,26 @@ def test_rows_without_an_id_or_a_rouble_price_are_not_kept():
     assert store.history("aliexpress", product_id="b") == []
 
 
+def test_a_conditional_price_is_kept_as_the_price_without_the_condition():
+    store = snapshots.Snapshots()
+    store.record(
+        [
+            MarketOffer(
+                source="nix",
+                product_id="1",
+                price_rub=109296.0,
+                price_condition="superprice",
+                price_regular_rub=112683.0,
+            ),
+            MarketOffer(source="ozon", product_id="2", price_rub=106011.0, price_condition="ozon_card"),
+        ],
+        now=DAY1,
+    )
+
+    assert [r.price_rub for r in store.history("nix", product_id="1")] == [112683.0]
+    assert store.history("ozon", product_id="2") == []
+
+
 def test_a_snapshot_is_found_by_its_url_without_the_query():
     store = snapshots.Snapshots()
     store.record([wb_offer(92104.0)], now=DAY1)
