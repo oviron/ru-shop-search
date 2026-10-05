@@ -12,30 +12,68 @@
 
 ## Установка
 
-Нужны `uv` и Google Chrome. Разово, на одну сессию:
+Нужны `uv` и Google Chrome. Разово, на одну сессию, плагин грузится прямо из чекаута:
 
 ```bash
 claude --plugin-dir ~/Developer/oviron/ru-shop-search
 ```
 
-Постоянно, через локальный marketplace из этого же каталога:
+Постоянно плагин ставится из коммитов ветки `plugin/bootstrap` через личный маркетплейс
+`ru-shop-search-local`. Он лежит вне репозитория, в
+`~/.claude/local-marketplaces/ru-shop-search-local/.claude-plugin/marketplace.json`:
 
-```bash
-claude plugin marketplace add ~/Developer/oviron/ru-shop-search
-claude plugin install ru-shop-search@ru-shop-search
+```json
+{
+  "name": "ru-shop-search-local",
+  "owner": { "name": "Dmitry Avdonkin" },
+  "metadata": {
+    "description": "Личный маркетплейс: ru-shop-search из коммитов ветки plugin/bootstrap основного чекаута"
+  },
+  "plugins": [
+    {
+      "name": "ru-shop-search",
+      "source": {
+        "source": "url",
+        "url": "file:///Users/oviron/Developer/oviron/ru-shop-search",
+        "ref": "plugin/bootstrap"
+      },
+      "description": "Поиск и сравнение цен в российских магазинах"
+    }
+  ]
+}
 ```
 
-Сервер плагина запускается прямо из этого каталога (так показывает `claude mcp list`), а
-установка ещё копирует каталог в `~/.claude/plugins/cache` и запоминает коммит. После
-новых коммитов переустанови плагин и начни новую сессию:
-
 ```bash
-claude plugin uninstall ru-shop-search@ru-shop-search
+claude plugin marketplace add ~/.claude/local-marketplaces/ru-shop-search-local
 ```
 
 ```bash
-claude plugin install ru-shop-search@ru-shop-search
+claude plugin install ru-shop-search@ru-shop-search-local
 ```
+
+Установка клонирует локальный репозиторий (push не нужен) и кладёт в
+`~/.claude/plugins/cache/ru-shop-search-local/ru-shop-search/2.4.2` только закоммиченные
+файлы. Сервер запускается из этой копии и при первом старте создаёт в ней `.venv` без
+dev-зависимостей. Маркетплейс из самого репозитория (`claude plugin marketplace add
+~/Developer/oviron/ru-shop-search`) для постоянной установки не годится: он копирует в кэш
+весь каталог, вместе с worktree, `.venv` и кэшами линтеров, и исключить что-то из этой
+копии Claude Code не даёт.
+
+Версия в `plugin.json` закреплена, поэтому `claude plugin update` новых коммитов не видит.
+После коммитов в `plugin/bootstrap` переустанови плагин, сохранив его данные:
+
+```bash
+claude plugin uninstall --keep-data ru-shop-search@ru-shop-search-local
+```
+
+```bash
+claude plugin install ru-shop-search@ru-shop-search-local
+```
+
+Каталог версии при этом пересоздаётся на месте, уже без `.venv`. Запущенный сервер держит
+старые файлы открытыми и отвечает, но магазины подгружает при первом обращении, и такой
+импорт может не найти пакетов. Поэтому в открытых сессиях переподключи сервер через `/mcp`
+или начни новую сессию.
 
 Плагин поднимает один MCP-сервер (`uv run marketplace-mcp`). Магазинам, которые пускают
 только браузер, нужен отдельный анонимный профиль Chrome с CDP на `127.0.0.1`. Сервер
