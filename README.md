@@ -112,7 +112,7 @@ Regard, Никс, Холодильник, AliExpress, Pepper, Авито.
 
 ```bash
 uv sync
-npm ci                                   # jsdom для DOM-тестов экстракторов
+npm ci --prefix tools/jsdom              # jsdom для DOM-тестов экстракторов
 uv run pytest -m "not live and not cdp"
 uv run ruff check
 uv run mypy

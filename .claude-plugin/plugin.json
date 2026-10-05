@@ -8,7 +8,7 @@
   "mcpServers": {
     "ru-shop-search": {
       "command": "uv",
-      "args": ["run", "--quiet", "--directory", "${CLAUDE_PLUGIN_ROOT}", "marketplace-mcp"],
+      "args": ["run", "--quiet", "--no-dev", "--directory", "${CLAUDE_PLUGIN_ROOT}", "marketplace-mcp"],
       "env": { "WB_REGION": "Санкт-Петербург", "DETMIR_REGION": "RU-SPE" }
     }
   }

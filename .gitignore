@@ -54,14 +54,11 @@ scratch/
 # Архивы релиза собираются и прикладываются к Releases, а не хранятся в git.
 *.zip
 
-# jsdom для DOM-тестов ставится из package.json + package-lock.json: оба
-# отслеживаются намеренно (CI кладёт jsdom по этим манифестам, иначе
-# dom-тесты экстракторов тихо скипаются на раннерах).
+# jsdom для DOM-тестов ставится из tools/jsdom/package.json + package-lock.json:
+# оба отслеживаются намеренно (CI кладёт jsdom по этим манифестам, иначе
+# dom-тесты экстракторов тихо скипаются на раннерах). Не в корне: из корня
+# плагина Claude Code сам ставит npm-зависимости в каждую установленную копию.
 node_modules/
-
-# dsh/package.json is not the Node artefact above: it is the plugin-bundle
-# manifest every dsh install resolves, so it must be tracked.
-!dsh/package.json
 
 # Local tooling and run artifacts that must never be committed.
 .agent/
