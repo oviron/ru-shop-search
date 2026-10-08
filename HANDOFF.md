@@ -21,9 +21,9 @@
 ничего не опубликовано. По пунктам «Готово, когда»:
 
 - Офлайн-набор: 1890 passed; `ruff` и `mypy` чисты; покрытие 86,03 % при пороге 70 %.
-- Плагин установлен постоянно, 2026-10-05: `claude plugin install
-  ru-shop-search@ru-shop-search-local` (scope user) из личного маркетплейса
-  `~/.claude/local-marketplaces/ru-shop-search-local`. `claude mcp list` показывает сервер
+- Плагин `ru-shop-search@ru-shop-search-local` из личного маркетплейса
+  `~/.claude/local-marketplaces/ru-shop-search-local` стоит в local scope `/cl` и по
+  умолчанию выключен. Включённым `claude mcp list` показывает сервер
   `plugin:ru-shop-search:ru-shop-search` с `--no-dev --directory
   ~/.claude/plugins/cache/ru-shop-search-local/ru-shop-search/2.4.2`: Connected.
   `plugin details` видит три скилла. Как устроена установка, описано в «Отступлениях».

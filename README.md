@@ -47,8 +47,12 @@ claude --plugin-dir ~/Developer/oviron/ru-shop-search
 claude plugin marketplace add ~/.claude/local-marketplaces/ru-shop-search-local
 ```
 
+Плагин ставится в local scope проекта, где нужен поиск (сейчас `/cl`), и по умолчанию
+выключен: сессия включает его строкой `"ru-shop-search@ru-shop-search-local": true` в
+`enabledPlugins` своего `.claude/settings.local.json`. Команды — из корня проекта:
+
 ```bash
-claude plugin install ru-shop-search@ru-shop-search-local
+claude plugin install --scope local ru-shop-search@ru-shop-search-local
 ```
 
 Установка клонирует локальный репозиторий (push не нужен) и кладёт в
@@ -59,15 +63,19 @@ dev-зависимостей. Маркетплейс из самого репо�
 весь каталог, вместе с worktree, `.venv` и кэшами линтеров, и исключить что-то из этой
 копии Claude Code не даёт.
 
+Codex запускает сервер прямо из основного чекаута (`uv run --no-dev --directory
+~/Developer/oviron/ru-shop-search marketplace-mcp`), поэтому чекаут держится на
+`plugin/bootstrap`: иначе Claude и Codex работают на разном коде.
+
 Версия в `plugin.json` закреплена, поэтому `claude plugin update` новых коммитов не видит.
 После коммитов в `plugin/bootstrap` переустанови плагин, сохранив его данные:
 
 ```bash
-claude plugin uninstall --keep-data ru-shop-search@ru-shop-search-local
+claude plugin uninstall --scope local --keep-data ru-shop-search@ru-shop-search-local
 ```
 
 ```bash
-claude plugin install ru-shop-search@ru-shop-search-local
+claude plugin install --scope local ru-shop-search@ru-shop-search-local
 ```
 
 Каталог версии при этом пересоздаётся на месте, уже без `.venv`. Запущенный сервер держит
